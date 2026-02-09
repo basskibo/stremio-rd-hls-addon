@@ -69,6 +69,8 @@ export async function unrestrictRD(url) {
           `https://api.themoviedb.org/3/tv/${tmdbId}/season/${season}/episode/${episode}?api_key=${TMDB_API_KEY}`
         );
         const epData = await epResp.json();
+        console.log('epData', epData)
+
         if (!epData.name) {
           console.warn('Episode not found:', stremioId);
           return null;
@@ -80,7 +82,6 @@ export async function unrestrictRD(url) {
       }
   
       console.log('QUERY', query)
-      console.log('epData', epData)
       console.log('findData', findData)
       console.log('tmdbId', tmdbId)
       console.log('imdbId', imdbId)
