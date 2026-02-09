@@ -4,6 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createProxyMiddleware } from 'http-proxy-middleware';
 import { unrestrictRD, unrestrictRDFromId } from './rd_helper.js';
 import logger from './logger.js';
 import pkg from 'stremio-addon-sdk';
@@ -86,40 +87,29 @@ builder.defineStreamHandler(async ({ id, type }) => {
 });
 
 // Koristi serveHTTP da servira addon endpoint-e
-// serveHTTP automatski servira: /manifest.json, /:resource/:type/:id.json
-// Express servira: /start, /stream/*.m3u8, /stream/*.ts
+// serveHTTP pokreće svoj server na određenom portu
+// Rešenje: pokreni serveHTTP na portu 3001 interno, a Express na 3000
+// Proxy-uj addon zahteve ka serveHTTP serveru, a FFmpeg endpoint-e serviraj direktno
 
-// serveHTTP pokreće svoj server, ali možemo da koristimo Express da servira sve
-// tako što ćemo servirati addon endpoint-e kroz Express (kao što serveHTTP radi)
-const addonInterface = builder.getInterface();
+const ADDON_PORT = 3001; // Interni port za serveHTTP
 
-// Stremio addon endpoints - serviraj ih kroz Express (kao što serveHTTP radi)
-app.get('/manifest.json', (req, res) => {
-  res.json(addonInterface.manifest);
-});
+// Pokreni serveHTTP na internom portu
+logger.log(`Starting serveHTTP on internal port ${ADDON_PORT}...`);
+serveHTTP(builder.getInterface(), { port: ADDON_PORT });
 
-app.get('/:resource/:type/:id.json', async (req, res) => {
-  const { resource, type, id } = req.params;
-  
-  try {
-    // Koristi addon interface handler-e direktno (kao što serveHTTP radi)
-    if (resource === 'stream' && addonInterface.stream) {
-      const result = await addonInterface.stream({ type, id });
-      res.json(result);
-    } else if (resource === 'catalog' && addonInterface.catalog) {
-      const result = await addonInterface.catalog({ type, id });
-      res.json(result);
-    } else if (resource === 'meta' && addonInterface.meta) {
-      const result = await addonInterface.meta({ type, id });
-      res.json(result);
-    } else {
-      res.status(404).json({ error: 'Resource not found' });
-    }
-  } catch (err) {
-    logger.error('Error handling addon request:', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+// Proxy middleware za addon endpoint-e ka serveHTTP serveru
+// serveHTTP servira: /manifest.json, /:resource/:type/:id.json
+app.use('/manifest.json', createProxyMiddleware({
+  target: `http://localhost:${ADDON_PORT}`,
+  changeOrigin: true,
+  logLevel: 'debug'
+}));
+
+app.use('/:resource/:type/:id.json', createProxyMiddleware({
+  target: `http://localhost:${ADDON_PORT}`,
+  changeOrigin: true,
+  logLevel: 'debug'
+}));
   
 // Funkcija za čišćenje HLS foldera
 function clearHLSFolder() {
@@ -257,26 +247,15 @@ app.use("/stream", (req, res, next) => {
   }
 }));
 
-// Pokretanje servera
-// Koristimo serveHTTP da servira addon endpoint-e na portu 3000
-// serveHTTP automatski servira manifest.json i stream endpoint-e
-// Express će servirati FFmpeg endpoint-e (/start, /stream/*.m3u8)
-
-// VAŽNO: serveHTTP pokreće svoj server, pa ne možemo da koristimo Express na istom portu
-// Rešenje: koristimo serveHTTP na portu 3000 i dodajemo FFmpeg endpoint-e kroz middleware
-// ALI serveHTTP pokreće svoj server, ne možemo da dodamo Express endpoint-e
-
-// Zato koristimo Express da servira sve, uključujući addon endpoint-e
+// Pokretanje Express servera na portu 3000
+// Express servira FFmpeg endpoint-e direktno (/start, /stream/*)
+// Express proxy-uje addon endpoint-e ka serveHTTP serveru na portu 3001
 // serveHTTP servira: /manifest.json, /:resource/:type/:id.json
-// Express servira: /start, /stream/*
 
 const server = app.listen(PORT, () => {
-  logger.log(`Server running at ${SERVER_BASE_URL}`);
+  logger.log(`Express server running at ${SERVER_BASE_URL}`);
+  logger.log(`serveHTTP addon server running on internal port ${ADDON_PORT}`);
   logger.log(`Stremio addon manifest: ${SERVER_BASE_URL}/manifest.json`);
   logger.log(`Add this URL to Stremio: ${SERVER_BASE_URL}/manifest.json`);
   logger.log(`FFmpeg endpoints: ${SERVER_BASE_URL}/start, ${SERVER_BASE_URL}/stream/*.m3u8`);
-  
-  // serveHTTP pokreće svoj server, ali koristimo Express da servira sve
-  // Express endpoint-e serviraju addon funkcionalnost (kao što serveHTTP radi)
-  // Tako da sve radi na portu 3000 kroz Express
 });
