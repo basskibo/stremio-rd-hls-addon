@@ -1,8 +1,22 @@
 import pkg from 'stremio-addon-sdk';
 const { addonBuilder, serveHTTP } = pkg;
 import { unrestrictRDFromId } from './rd_helper.js';
+import os from 'os';
 
-const PC_IP = '192.168.1.16'; // ili IPv4 iz server.js (možeš dinamički ako želiš)
+// Dohvati lokalni IPv4
+const interfaces = os.networkInterfaces();
+let IPv4 = null;
+for (const name of Object.keys(interfaces)) {
+  for (const iface of interfaces[name]) {
+    if (iface.family === 'IPv4' && !iface.internal) {
+      IPv4 = iface.address;
+      break;
+    }
+  }
+  if (IPv4) break;
+}
+
+const SERVER_PORT = 3000; // Port na kome radi server.js
 
 const manifest = {
   id: 'org.local.rd-hls',
@@ -16,24 +30,33 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-builder.defineStreamHandler(async ({ id }) => {
-    console.log(`Request for stream: id=${id}`);
+builder.defineStreamHandler(async ({ id, type }) => {
+    console.log(`Request for stream: type=${type}, id=${id}`);
   
-    // TODO: map Stremio ID -> RD link
-    const rdLink = await unrestrictRDFromId(id); // može hardkod za test
-    if (!rdLink) return res.json({ streams: [] });
-  
-    const startUrl = `http://${IPv4}:${PORT}/start?url=${encodeURIComponent(rdLink)}`;
-    res.json({
-      streams: [
-        {
-          name: 'Local PC (HLS)',
-          title: 'RD → FFmpeg → HLS',
-          url: startUrl
-        }
-      ]
-    });
-
+    try {
+      // Map Stremio ID -> RD link
+      const rdLink = await unrestrictRDFromId(id);
+      if (!rdLink) {
+        console.log(`No RD link found for id: ${id}`);
+        return { streams: [] };
+      }
+    
+      // URL koji pokreće FFmpeg stream na server.js
+      const startUrl = `http://${IPv4}:${SERVER_PORT}/start?url=${encodeURIComponent(rdLink)}`;
+      
+      return {
+        streams: [
+          {
+            name: 'Local PC (HLS)',
+            title: 'RD → FFmpeg → HLS',
+            url: startUrl
+          }
+        ]
+      };
+    } catch (err) {
+      console.error('Error in stream handler:', err);
+      return { streams: [] };
+    }
 });
 
 

@@ -1,6 +1,8 @@
 const TMDB_API_KEY = "f593842b5c3424753cb2fec85a21b46f"; // stavi ovde svoj TMDb API key
 
 export async function unrestrictRD(url) {
+  try {
+    console.log('UNRESTRICT RD', url)
     const res = await fetch(
       'https://api.real-debrid.com/rest/1.0/unrestrict/link',
       {
@@ -19,7 +21,11 @@ export async function unrestrictRD(url) {
   
     const data = await res.json();
     console.log('DATA' , data)
-    return data.download; // 👈 DIRECT VIDEO URL
+    return data.download;
+  } catch (err) {
+    console.error('Error in unrestrictRD:', err);
+    return null;
+  }
   }
   
 
