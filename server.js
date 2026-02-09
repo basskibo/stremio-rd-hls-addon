@@ -53,17 +53,57 @@ app.get('/stream/:type/:id.json', async (req, res) => {
     });
   });
   
+// Funkcija za čišćenje HLS foldera
+function clearHLSFolder() {
+  try {
+    if (!fs.existsSync(HLS_DIR)) {
+      fs.mkdirSync(HLS_DIR, { recursive: true });
+      return;
+    }
+    
+    const files = fs.readdirSync(HLS_DIR);
+    files.forEach(file => {
+      const filePath = path.join(HLS_DIR, file);
+      try {
+        fs.unlinkSync(filePath);
+        logger.debug(`Deleted HLS file: ${file}`);
+      } catch (err) {
+        logger.warn(`Failed to delete HLS file ${file}:`, err.message);
+      }
+    });
+    logger.log('HLS folder cleared');
+  } catch (err) {
+    logger.error('Error clearing HLS folder:', err);
+  }
+}
+
 // Pokretanje FFmpeg streama
 app.get('/start', async (req, res) => {
   const urlParam = req.query.url;
   if (!urlParam) return res.send("Missing url in params");
 
   try {
+    // Zaustavi stari FFmpeg proces ako postoji
+    if (ffmpegProcess) {
+      logger.log('Stopping previous FFmpeg process...');
+      ffmpegProcess.kill("SIGKILL");
+      ffmpegProcess = null;
+      // Sačekaj malo da se proces zaista završi
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    // Očisti HLS folder pre pokretanja novog streama
+    logger.log('Clearing HLS folder...');
+    clearHLSFolder();
+    
     // Dobij direktan link sa RD
     const directUrl = await unrestrictRD(urlParam);
+    if (!directUrl) {
+      logger.error('Failed to get direct URL from RD');
+      return res.status(500).send('Failed to get direct URL');
+    }
 
-    if (ffmpegProcess) ffmpegProcess.kill("SIGKILL");
-
+    logger.log(`Starting FFmpeg stream for: ${directUrl.substring(0, 50)}...`);
     ffmpegProcess = spawn('ffmpeg', [
       '-y',
       '-i', directUrl,
@@ -85,7 +125,19 @@ app.get('/start', async (req, res) => {
     ]);
 
     ffmpegProcess.stderr.on('data', d => logger.debug('FFmpeg:', d.toString()));
+    
+    ffmpegProcess.on('error', (err) => {
+      logger.error('FFmpeg process error:', err);
+    });
+    
+    ffmpegProcess.on('exit', (code, signal) => {
+      logger.log(`FFmpeg process exited with code ${code}, signal ${signal}`);
+      ffmpegProcess = null;
+    });
 
+    // Sačekaj malo da se FFmpeg pokrene i kreira prvi segment
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
     // Kada se pokrene, redirectuj na HLS playlist
     res.redirect(`/stream/stream.m3u8`);
 
