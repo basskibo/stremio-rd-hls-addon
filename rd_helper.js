@@ -70,7 +70,7 @@ export async function unrestrictRD(url) {
  * @param {string} stremioId - npr. "tt0388629:9:47"
  * @returns {Promise<string|null>} direktan RD HLS link ili null
  */
- async function unrestrictRDFromId(stremioId) {
+ async function unrestrictRDFromId(stremioId, type = 'series') {
     try {
       let imdbId, season, episode;
       const parts = stremioId.split(':');
@@ -130,39 +130,29 @@ export async function unrestrictRD(url) {
       logger.debug('parts', parts)
       logger.debug('stremioId', stremioId)
       
-      // 3️⃣ Prvo proveri postojeće torrentove na RD account-u
-      logger.log(`Checking existing RD torrents for query: ${query}`);
-      const existingTorrentResult = await searchRDTorrents(query);
+      // 3️⃣ Koristi Torrentio addon API da dobiješ stream linkove, zatim unrestrictuj kroz RD
+      // Ovo je način kako rade svi RD addoni - koriste Torrentio da dobiju linkove, pa ih unrestrictuju
+      logger.log(`Getting stream links from Torrentio for Stremio ID: ${stremioId}`);
       
-      if (existingTorrentResult) {
-        // Ako je direktan link, vrati ga odmah
-        if (existingTorrentResult.startsWith('http://') || existingTorrentResult.startsWith('https://')) {
-          logger.log('Found existing RD link, using it directly');
-          return existingTorrentResult;
-        }
-        
-        // Ako je torrent ID, uzmi direktan link
-        if (typeof existingTorrentResult === 'string') {
-          logger.log('Found existing RD torrent ID, getting direct link');
-          const directLink = await getTorrentDownloadLink(existingTorrentResult);
-          if (directLink) {
-            return directLink;
-          }
-        }
+      const torrentioLinks = await getStreamLinksFromTorrentio(stremioId, type || 'series');
+      
+      if (!torrentioLinks || torrentioLinks.length === 0) {
+        logger.warn('No stream links found from Torrentio');
+        return null;
       }
       
-      // 4️⃣ Ako nema postojećeg torrenta, treba magnet link da dodamo novi
-      logger.warn('No existing torrent found on RD account for:', query);
-      logger.warn('Need magnet link to add new torrent to RD');
-      logger.warn('TODO: Implement magnet link search or use mapping file');
+      // Uzmi prvi link (obično najbolji kvalitet) i unrestrictuj ga kroz RD
+      const torrentioLink = torrentioLinks[0].url;
+      logger.log(`Unrestricting Torrentio link through RD: ${torrentioLink.substring(0, 50)}...`);
       
-      // Za sada vraćamo null - treba implementirati dobijanje magnet linka
-      // Opcije:
-      // - Koristi Torrentio addon API sa Stremio ID
-      // - Koristi torrent search API
-      // - Koristi mapping fajl sa predefinisanim linkovima
+      const rdDirectLink = await unrestrictRD(torrentioLink);
+      if (!rdDirectLink) {
+        logger.error('Failed to unrestrict link through RD');
+        return null;
+      }
       
-      return null;
+      logger.log('Successfully got direct link from RD');
+      return rdDirectLink;
     } catch (err) {
       logger.error('Error in unrestrictRDFromId:', err);
       return null;
@@ -357,9 +347,20 @@ async function searchRDTorrents(query) {
       }));
       logger.debug(`Sample RD torrents: ${JSON.stringify(sampleTorrents, null, 2)}`);
       
-      // Loguj sve nazive torrentova za debugging
+      // Loguj sve nazive torrentova za debugging (INFO level da korisnik vidi)
       const allFilenames = torrents.map(t => t.filename).filter(Boolean);
-      logger.debug(`All RD torrent filenames (first 10): ${allFilenames.slice(0, 10).join(', ')}`);
+      logger.info(`Sample RD torrent filenames (first 10): ${allFilenames.slice(0, 10).join(', ')}`);
+      
+      // Traži torrentove koji sadrže "demon" i "slayer" za debugging
+      const demonSlayerTorrents = torrents.filter(t => 
+        t.filename && t.filename.toLowerCase().includes('demon') && t.filename.toLowerCase().includes('slayer')
+      );
+      if (demonSlayerTorrents.length > 0) {
+        logger.info(`Found ${demonSlayerTorrents.length} Demon Slayer torrents on RD:`);
+        demonSlayerTorrents.slice(0, 5).forEach(t => {
+          logger.info(`  - ${t.filename} (Status: ${t.status}, Has links: ${!!(t.links && t.links.length > 0)})`);
+        });
+      }
     } else {
       logger.warn('No torrents found on RD account - account might be empty or API issue');
     }
@@ -392,10 +393,51 @@ async function searchRDTorrents(query) {
         const episode = seasonEpisodeMatch[2];
         const seriesName = query.split(/s\d+e\d+/i)[0].trim().toLowerCase();
         
+        // Pokušaj različite varijante serije (bez ":", sa tačkama, itd.)
+        const seriesVariants = [
+          seriesName,
+          seriesName.replace(/:/g, ''),
+          seriesName.replace(/:/g, '.'),
+          seriesName.replace(/\s+/g, '.'),
+          seriesName.replace(/\s+/g, ''),
+          'demon slayer',
+          'kimetsu no yaiba'
+        ];
+        
+        const seasonEpisodeVariants = [
+          `s${season}e${episode}`,
+          `s${season.padStart(2, '0')}e${episode.padStart(2, '0')}`,
+          `s${season}e${episode.padStart(2, '0')}`,
+          `season ${season} episode ${episode}`,
+          `s${season} e${episode}`
+        ];
+        
         matchingTorrent = torrents.find(t => {
           if (!t.filename) return false;
           const filenameLower = t.filename.toLowerCase();
-          return filenameLower.includes(seriesName) && 
+          
+          // Proveri da li naziv sadrži bilo koju varijantu serije
+          const hasSeriesName = seriesVariants.some(variant => filenameLower.includes(variant));
+          
+          // Proveri da li naziv sadrži bilo koju varijantu sezone/epizode
+          const hasSeasonEpisode = seasonEpisodeVariants.some(variant => filenameLower.includes(variant));
+          
+          return hasSeriesName && hasSeasonEpisode;
+        });
+      }
+    }
+    
+    // Ako i dalje nema, pokušaj samo sa ključnim rečima (demon + slayer + sezona/epizoda)
+    if (!matchingTorrent) {
+      const seasonEpisodeMatch = query.match(/s(\d+)e(\d+)/i);
+      if (seasonEpisodeMatch) {
+        const season = seasonEpisodeMatch[1];
+        const episode = seasonEpisodeMatch[2];
+        
+        matchingTorrent = torrents.find(t => {
+          if (!t.filename) return false;
+          const filenameLower = t.filename.toLowerCase();
+          return (filenameLower.includes('demon') && filenameLower.includes('slayer')) &&
                  (filenameLower.includes(`s${season}e${episode}`) || 
                   filenameLower.includes(`s${season.padStart(2, '0')}e${episode.padStart(2, '0')}`));
         });
@@ -475,43 +517,55 @@ async function searchTorrent(query, torrentHash = null) {
 }
 
 /**
- * Pokušava da dobije magnet link za Stremio ID
+ * Dobija stream linkove iz Torrentio addon API-ja
  * @param {string} stremioId - Stremio ID (npr. "tt9335498:5:6")
- * @param {string} query - Search query string
- * @returns {Promise<string|null>} Magnet link ili null
+ * @param {string} type - Tip sadržaja ("movie" ili "series")
+ * @returns {Promise<Array|null>} Niz stream linkova ili null
  */
-async function getMagnetLinkFromStremioId(stremioId, query) {
+async function getStreamLinksFromTorrentio(stremioId, type) {
   try {
-    logger.log(`Attempting to get magnet link for Stremio ID: ${stremioId}`);
+    logger.log(`Getting stream links from Torrentio for: ${stremioId} (type: ${type})`);
     
-    // Opcija 1: Proveri mapping fajl
-    const mappingFile = path.join(__dirname, 'torrent-mapping.json');
-    if (fs.existsSync(mappingFile)) {
-      const mapping = JSON.parse(fs.readFileSync(mappingFile, 'utf8'));
-      if (mapping[stremioId]) {
-        logger.log('Found magnet link in mapping file');
-        return mapping[stremioId];
-      }
-      if (mapping[query]) {
-        logger.log('Found magnet link in mapping file for query');
-        return mapping[query];
-      }
+    // Torrentio addon URL format
+    // Možeš koristiti javni Torrentio instance ili svoj
+    // Primer: https://torrentio.strem.fun/{config}/manifest.json
+    // Stream endpoint: https://torrentio.strem.fun/{config}/stream/{type}/{id}.json
+    
+    // Za sada koristimo javni Torrentio instance
+    // Možeš promeniti ovo da koristiš svoj Torrentio config
+    const TORRENTIO_BASE = process.env.TORRENTIO_URL || 'https://torrentio.strem.fun';
+    const TORRENTIO_CONFIG = process.env.TORRENTIO_CONFIG || 'filter=qualityfilter=1080p|720p|480p';
+    
+    const streamUrl = `${TORRENTIO_BASE}/${TORRENTIO_CONFIG}/stream/${type}/${stremioId}.json`;
+    logger.log(`Fetching from Torrentio: ${streamUrl}`);
+    
+    const res = await fetch(streamUrl);
+    
+    if (!res.ok) {
+      logger.error(`Torrentio API error: ${res.status} ${res.statusText}`);
+      return null;
     }
     
-    // Opcija 2: Koristi Torrentio addon API (ako je dostupan)
-    // Možeš koristiti Torrentio addon URL da dobiješ stream info koji sadrži magnet link
-    // Primer: https://torrentio.strem.fun/.../stream/{type}/{id}.json
+    const data = await res.json();
+    logger.log(`Torrentio returned ${data.streams?.length || 0} streams`);
     
-    // Opcija 3: Koristi torrent search API
-    // Možeš integrisati 1337x, RARBG, ili drugi torrent search API
+    if (!data.streams || data.streams.length === 0) {
+      logger.warn('No streams found from Torrentio');
+      return null;
+    }
     
-    logger.warn('No magnet link found. Create torrent-mapping.json file with format:');
-    logger.warn(`{ "${stremioId}": "magnet:?xt=urn:btih:..." }`);
-    logger.warn(`or { "${query}": "magnet:?xt=urn:btih:..." }`);
+    // Vrati stream linkove (obično su to magnet linkovi ili direktni linkovi)
+    const streamLinks = data.streams.map(s => ({
+      name: s.name || s.title,
+      url: s.url,
+      quality: s.quality || 'unknown'
+    }));
     
-    return null;
+    logger.log(`Found ${streamLinks.length} stream links from Torrentio`);
+    return streamLinks;
+    
   } catch (err) {
-    logger.error('Error getting magnet link:', err);
+    logger.error('Error getting stream links from Torrentio:', err.message);
     return null;
   }
 }
@@ -523,5 +577,5 @@ export {
   searchTorrent,
   searchRDTorrents,
   checkRDInstantAvailability,
-  getMagnetLinkFromStremioId
+  getStreamLinksFromTorrentio
 };
