@@ -4,7 +4,6 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createProxyMiddleware } from 'http-proxy-middleware';
 import { unrestrictRD, unrestrictRDFromId } from './rd_helper.js';
 import logger from './logger.js';
 import pkg from 'stremio-addon-sdk';
@@ -86,30 +85,79 @@ builder.defineStreamHandler(async ({ id, type }) => {
   }
 });
 
-// Koristi serveHTTP da servira addon endpoint-e
-// serveHTTP pokreće svoj server na određenom portu
-// Rešenje: pokreni serveHTTP na portu 3001 interno, a Express na 3000
-// Proxy-uj addon zahteve ka serveHTTP serveru, a FFmpeg endpoint-e serviraj direktno
+// serveHTTP servira HTML stranicu i JSON endpoint-e
+// Ali možda ne sluša na svim interfejsima - probajmo da serviramo addon endpoint-e direktno kroz Express
+// na isti način kao serveHTTP
+const addonInterface = builder.getInterface();
 
-const ADDON_PORT = 3001; // Interni port za serveHTTP
+// Serviraj manifest.json kroz Express (kao serveHTTP)
+app.get('/manifest.json', (req, res) => {
+  // Ako je browser zahtev (Accept: text/html), serviraj HTML stranicu
+  if (req.headers.accept && req.headers.accept.includes('text/html')) {
+    const manifest = addonInterface.manifest;
+    res.send(`<!DOCTYPE html>
+<html style="background-image: url(https://dl.strem.io/addon-background.jpg);">
+<head>
+  <meta charset="utf-8">
+  <title>${manifest.name} - Stremio Addon</title>
+  <style>
+    * { box-sizing: border-box; }
+    body, html { margin: 0; padding: 0; width: 100%; min-height: 100%; }
+    body { display: flex; align-items: center; justify-content: center; font-family: Arial, sans-serif; }
+    .container { text-align: center; background: rgba(0,0,0,0.8); padding: 40px; border-radius: 10px; }
+    .icon { width: 100px; height: 100px; margin: 0 auto 20px; background: #9F3ED5; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+    .icon::after { content: '▶'; color: white; font-size: 50px; }
+    h1 { color: white; margin: 0 0 10px; }
+    .version { color: #ccc; margin: 0 0 20px; }
+    .description { color: #ccc; margin: 0 0 30px; }
+    .install-link { display: inline-block; }
+    button { background: #9F3ED5; color: white; border: none; padding: 15px 30px; font-size: 18px; border-radius: 5px; cursor: pointer; }
+    button:hover { background: #8E2FC4; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="icon"></div>
+    <h1>${manifest.name}</h1>
+    <div class="version">v${manifest.version}</div>
+    <div class="description">${manifest.description}</div>
+    <a id="installLink" class="install-link" href="stremio://${req.headers.host || 'localhost:3000'}/manifest.json">
+      <button>INSTALL</button>
+    </a>
+  </div>
+  <script>
+    document.getElementById('installLink').href = 'stremio://' + window.location.host + '/manifest.json';
+  </script>
+</body>
+</html>`);
+  } else {
+    // Ako je JSON zahtev, serviraj manifest
+    res.json(addonInterface.manifest);
+  }
+});
 
-// Pokreni serveHTTP na internom portu
-logger.log(`Starting serveHTTP on internal port ${ADDON_PORT}...`);
-serveHTTP(builder.getInterface(), { port: ADDON_PORT });
-
-// Proxy middleware za addon endpoint-e ka serveHTTP serveru
-// serveHTTP servira: /manifest.json, /:resource/:type/:id.json
-app.use('/manifest.json', createProxyMiddleware({
-  target: `http://localhost:${ADDON_PORT}`,
-  changeOrigin: true,
-  logLevel: 'debug'
-}));
-
-app.use('/:resource/:type/:id.json', createProxyMiddleware({
-  target: `http://localhost:${ADDON_PORT}`,
-  changeOrigin: true,
-  logLevel: 'debug'
-}));
+// Serviraj stream endpoint-e kroz Express (kao serveHTTP)
+app.get('/:resource/:type/:id.json', async (req, res) => {
+  const { resource, type, id } = req.params;
+  
+  try {
+    if (resource === 'stream' && addonInterface.stream) {
+      const result = await addonInterface.stream({ type, id });
+      res.json(result);
+    } else if (resource === 'catalog' && addonInterface.catalog) {
+      const result = await addonInterface.catalog({ type, id });
+      res.json(result);
+    } else if (resource === 'meta' && addonInterface.meta) {
+      const result = await addonInterface.meta({ type, id });
+      res.json(result);
+    } else {
+      res.status(404).json({ error: 'Resource not found' });
+    }
+  } catch (err) {
+    logger.error('Error handling addon request:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
   
 // Funkcija za čišćenje HLS foldera
 function clearHLSFolder() {
@@ -247,14 +295,12 @@ app.use("/stream", (req, res, next) => {
   }
 }));
 
-// Pokretanje Express servera na portu 3000
-// Express servira FFmpeg endpoint-e direktno (/start, /stream/*)
-// Express proxy-uje addon endpoint-e ka serveHTTP serveru na portu 3001
-// serveHTTP servira: /manifest.json, /:resource/:type/:id.json
+// Express servira sve na portu 3000:
+// - Addon endpoint-e (/manifest.json, /:resource/:type/:id.json) - kao serveHTTP
+// - FFmpeg endpoint-e (/start, /stream/*.m3u8, /stream/*.ts)
 
-const server = app.listen(PORT, () => {
-  logger.log(`Express server running at ${SERVER_BASE_URL}`);
-  logger.log(`serveHTTP addon server running on internal port ${ADDON_PORT}`);
+const server = app.listen(PORT, '0.0.0.0', () => {
+  logger.log(`Server running on port ${PORT}`);
   logger.log(`Stremio addon manifest: ${SERVER_BASE_URL}/manifest.json`);
   logger.log(`Add this URL to Stremio: ${SERVER_BASE_URL}/manifest.json`);
   logger.log(`FFmpeg endpoints: ${SERVER_BASE_URL}/start, ${SERVER_BASE_URL}/stream/*.m3u8`);
