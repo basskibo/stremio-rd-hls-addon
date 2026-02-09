@@ -10,7 +10,14 @@ const TMDB_API_KEY = "f593842b5c3424753cb2fec85a21b46f"; // stavi ovde svoj TMDb
 
 export async function unrestrictRD(url) {
   try {
-    logger.log('UNRESTRICT RD', url)
+    logger.log('UNRESTRICT RD - URL:', url);
+    
+    // Proveri da li je validan URL
+    if (!url || (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('magnet:'))) {
+      logger.error('Invalid URL format for unrestrictRD:', url);
+      return null;
+    }
+    
     const res = await fetch(
       'https://api.real-debrid.com/rest/1.0/unrestrict/link',
       {
@@ -23,18 +30,36 @@ export async function unrestrictRD(url) {
       }
     );
   
+    const status = res.status;
+    const statusText = res.statusText;
+    logger.log(`RD API Response - Status: ${status} ${statusText}`);
+  
     if (!res.ok) {
-      throw new Error('RD API error');
+      // Pokušaj da pročitaš error response
+      let errorBody;
+      try {
+        errorBody = await res.text();
+        logger.error('RD API Error Response:', errorBody);
+      } catch (e) {
+        logger.error('Could not read error response body');
+      }
+      throw new Error(`RD API error: ${status} ${statusText} - ${errorBody || ''}`);
     }
   
     const data = await res.json();
-    logger.log('DATA', data)
+    logger.log('RD API Success - DATA:', JSON.stringify(data, null, 2));
+    
+    if (!data.download) {
+      logger.error('RD API response missing download field:', data);
+      return null;
+    }
+    
     return data.download;
   } catch (err) {
-    logger.error('Error in unrestrictRD:', err);
+    logger.error('Error in unrestrictRD:', err.message, err.stack);
     return null;
   }
-  }
+}
   
 
   
@@ -102,11 +127,26 @@ export async function unrestrictRD(url) {
       logger.debug('episode', episode)
       logger.debug('parts', parts)
       logger.debug('stremioId', stremioId)
-      // 3️⃣ Search na Real-Debrid (ili unapred definisan link) → za sada hardkod test link
-      // Ovde ide tvoja logika za RD API / torrent search
-      // Za primer koristimo unrestrictRD na fiktivnom linku
-      const rdUrl = await unrestrictRD(query); // unrestrictRD može da prihvati query string ili ID sa RD
-      return rdUrl;
+      
+      // 3️⃣ TODO: Ovde treba da se implementira logika za pretragu na Real-Debrid
+      // Trenutno query je samo string sa nazivom, ali unrestrictRD očekuje RD link
+      // Opcije:
+      // - Pretraži RD torrents sa query stringom
+      // - Koristi unapred definisan RD link
+      // - Koristi RD cached link ako postoji
+      
+      logger.warn('unrestrictRDFromId: query string passed to unrestrictRD, but it expects RD link URL');
+      logger.warn('Query:', query);
+      logger.warn('TODO: Implement RD search/torrent lookup logic here');
+      
+      // Za sada vraćamo null jer nemamo validan RD link
+      return null;
+      
+      // Kada implementiraš RD search, koristi ovako:
+      // const rdLink = await searchRDOrGetCachedLink(query);
+      // if (!rdLink) return null;
+      // const rdUrl = await unrestrictRD(rdLink);
+      // return rdUrl;
     } catch (err) {
       logger.error('Error in unrestrictRDFromId:', err);
       return null;
