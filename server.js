@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import { unrestrictRD, unrestrictRDFromId } from './rd_helper.js';
 import logger from './logger.js';
 import pkg from 'stremio-addon-sdk';
-const { addonBuilder } = pkg;
+const { addonBuilder, serveHTTP } = pkg;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -85,31 +85,39 @@ builder.defineStreamHandler(async ({ id, type }) => {
   }
 });
 
-// Stremio addon endpoints
+// Koristi serveHTTP da servira addon endpoint-e
+// serveHTTP automatski servira: /manifest.json, /:resource/:type/:id.json
+// Express servira: /start, /stream/*.m3u8, /stream/*.ts
+
+// serveHTTP pokreće svoj server, ali možemo da koristimo Express da servira sve
+// tako što ćemo servirati addon endpoint-e kroz Express (kao što serveHTTP radi)
+const addonInterface = builder.getInterface();
+
+// Stremio addon endpoints - serviraj ih kroz Express (kao što serveHTTP radi)
 app.get('/manifest.json', (req, res) => {
-  res.json(builder.manifest());
+  res.json(addonInterface.manifest);
 });
 
 app.get('/:resource/:type/:id.json', async (req, res) => {
   const { resource, type, id } = req.params;
   
-  if (resource === 'stream') {
-    try {
-      // Koristi interface objekat da dobiješ handler
-      const addonInterface = builder.getInterface();
-      const handler = addonInterface.stream;
-      if (handler) {
-        const result = await handler({ type, id });
-        res.json(result);
-      } else {
-        res.status(404).json({ error: 'Stream handler not found' });
-      }
-    } catch (err) {
-      logger.error('Error handling stream request:', err);
-      res.status(500).json({ error: 'Internal server error' });
+  try {
+    // Koristi addon interface handler-e direktno (kao što serveHTTP radi)
+    if (resource === 'stream' && addonInterface.stream) {
+      const result = await addonInterface.stream({ type, id });
+      res.json(result);
+    } else if (resource === 'catalog' && addonInterface.catalog) {
+      const result = await addonInterface.catalog({ type, id });
+      res.json(result);
+    } else if (resource === 'meta' && addonInterface.meta) {
+      const result = await addonInterface.meta({ type, id });
+      res.json(result);
+    } else {
+      res.status(404).json({ error: 'Resource not found' });
     }
-  } else {
-    res.status(404).json({ error: 'Resource not found' });
+  } catch (err) {
+    logger.error('Error handling addon request:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
   
@@ -250,8 +258,25 @@ app.use("/stream", (req, res, next) => {
 }));
 
 // Pokretanje servera
-app.listen(PORT, () => {
+// Koristimo serveHTTP da servira addon endpoint-e na portu 3000
+// serveHTTP automatski servira manifest.json i stream endpoint-e
+// Express će servirati FFmpeg endpoint-e (/start, /stream/*.m3u8)
+
+// VAŽNO: serveHTTP pokreće svoj server, pa ne možemo da koristimo Express na istom portu
+// Rešenje: koristimo serveHTTP na portu 3000 i dodajemo FFmpeg endpoint-e kroz middleware
+// ALI serveHTTP pokreće svoj server, ne možemo da dodamo Express endpoint-e
+
+// Zato koristimo Express da servira sve, uključujući addon endpoint-e
+// serveHTTP servira: /manifest.json, /:resource/:type/:id.json
+// Express servira: /start, /stream/*
+
+const server = app.listen(PORT, () => {
   logger.log(`Server running at ${SERVER_BASE_URL}`);
   logger.log(`Stremio addon manifest: ${SERVER_BASE_URL}/manifest.json`);
   logger.log(`Add this URL to Stremio: ${SERVER_BASE_URL}/manifest.json`);
+  logger.log(`FFmpeg endpoints: ${SERVER_BASE_URL}/start, ${SERVER_BASE_URL}/stream/*.m3u8`);
+  
+  // serveHTTP pokreće svoj server, ali koristimo Express da servira sve
+  // Express endpoint-e serviraju addon funkcionalnost (kao što serveHTTP radi)
+  // Tako da sve radi na portu 3000 kroz Express
 });
