@@ -142,8 +142,15 @@ export async function unrestrictRD(url) {
       }
       
       // Uzmi prvi link (obično najbolji kvalitet) i unrestrictuj ga kroz RD
-      const torrentioLink = torrentioLinks[0].url;
+      const firstStream = torrentioLinks[0];
+      if (!firstStream || !firstStream.url) {
+        logger.error('Invalid stream data from Torrentio:', firstStream);
+        return null;
+      }
+      
+      const torrentioLink = firstStream.url;
       logger.log(`Unrestricting Torrentio link through RD: ${torrentioLink.substring(0, 50)}...`);
+      logger.debug(`Stream info: ${JSON.stringify(firstStream, null, 2)}`);
       
       const rdDirectLink = await unrestrictRD(torrentioLink);
       if (!rdDirectLink) {
@@ -548,20 +555,34 @@ async function getStreamLinksFromTorrentio(stremioId, type) {
     
     const data = await res.json();
     logger.log(`Torrentio returned ${data.streams?.length || 0} streams`);
+    logger.debug(`Torrentio response structure: ${JSON.stringify(Object.keys(data), null, 2)}`);
     
     if (!data.streams || data.streams.length === 0) {
       logger.warn('No streams found from Torrentio');
       return null;
     }
     
-    // Vrati stream linkove (obično su to magnet linkovi ili direktni linkovi)
-    const streamLinks = data.streams.map(s => ({
-      name: s.name || s.title,
-      url: s.url,
-      quality: s.quality || 'unknown'
-    }));
+    // Loguj strukturu prvog streama za debugging
+    if (data.streams[0]) {
+      logger.debug(`First stream structure: ${JSON.stringify(Object.keys(data.streams[0]), null, 2)}`);
+      logger.debug(`First stream data: ${JSON.stringify(data.streams[0], null, 2)}`);
+    }
     
-    logger.log(`Found ${streamLinks.length} stream links from Torrentio`);
+    // Vrati stream linkove (Torrentio vraća streams sa 'url' property-jem)
+    const streamLinks = data.streams.map(s => ({
+      name: s.name || s.title || 'Unknown',
+      url: s.url,
+      quality: s.quality || 'unknown',
+      infoHash: s.infoHash || null
+    })).filter(s => s.url); // Filtriraj samo one sa URL-om
+    
+    logger.log(`Found ${streamLinks.length} valid stream links from Torrentio`);
+    
+    if (streamLinks.length === 0) {
+      logger.error('No valid stream URLs found in Torrentio response');
+      return null;
+    }
+    
     return streamLinks;
     
   } catch (err) {
