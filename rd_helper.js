@@ -149,7 +149,8 @@ export async function unrestrictRD(url) {
       }
       
       const infoHash = firstStream.infoHash;
-      logger.log(`Processing stream: ${firstStream.name} (infoHash: ${infoHash.substring(0, 16)}...)`);
+      const streamName = String(firstStream.name || 'Unknown').replace(/\n/g, ' ').trim();
+      logger.log(`Processing stream: ${streamName} (infoHash: ${infoHash.substring(0, 16)}...)`);
       
       // 1. Prvo proveri RD instant availability sa infoHash-om
       logger.log('Checking RD instant availability...');
@@ -168,7 +169,8 @@ export async function unrestrictRD(url) {
         return null;
       }
       
-      logger.log(`Adding magnet link to RD: ${firstStream.magnetLink.substring(0, 50)}...`);
+      const magnetPreview = firstStream.magnetLink.substring(0, 60);
+      logger.log(`Adding magnet link to RD: ${magnetPreview}...`);
       const torrentId = await addTorrentToRD(firstStream.magnetLink);
       
       if (!torrentId) {
@@ -218,9 +220,10 @@ async function addTorrentToRD(magnetOrUrl) {
       return null;
     }
 
-    const data = await res.json();
-    logger.log('Torrent added to RD, ID:', data.id);
-    return data.id;
+      const data = await res.json();
+      const torrentId = data.id;
+      logger.log(`Torrent added to RD, ID: ${torrentId}`);
+      return torrentId;
   } catch (err) {
     logger.error('Error adding torrent to RD:', err);
     return null;
@@ -247,10 +250,48 @@ async function getTorrentDownloadLink(torrentId, maxRetries = 10, delayMs = 2000
       }
 
       const torrentInfo = await res.json();
-      logger.log(`Torrent status: ${torrentInfo.status} (${i + 1}/${maxRetries})`);
+      const statusText = torrentInfo.status || 'unknown';
+      logger.log(`Torrent status: ${statusText} (${i + 1}/${maxRetries})`);
 
-      // Status: 0=waiting, 1=downloading, 2=completed, 3=error
-      if (torrentInfo.status === 2) {
+      // Status može biti: "magnet_error", "magnet_conversion", "waiting_files_selection", "queued", "downloading", "downloaded", "error", "virus", "compressing", "uploading"
+      // Ako je "waiting_files_selection", treba da selektujemo fajlove
+      if (statusText === 'waiting_files_selection') {
+        logger.log('Torrent waiting for file selection, selecting files...');
+        
+        if (torrentInfo.files && torrentInfo.files.length > 0) {
+          // Selektuj sve fajlove ili samo video fajlove
+          const videoFiles = torrentInfo.files.filter(f => {
+            const name = (f.path || f.filename || '').toLowerCase();
+            return name.endsWith('.mkv') || name.endsWith('.mp4') || name.endsWith('.avi') || 
+                   name.endsWith('.mov') || name.endsWith('.webm') || name.endsWith('.m4v');
+          });
+          
+          const filesToSelect = videoFiles.length > 0 ? videoFiles : torrentInfo.files;
+          const fileIds = filesToSelect.map(f => f.id).join(',');
+          
+          logger.log(`Selecting ${filesToSelect.length} file(s) for download`);
+          
+          const selectRes = await fetch(`${RD_API_BASE}/torrents/selectFiles/${torrentId}`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${RD_API_TOKEN}`,
+              'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: new URLSearchParams({ files: fileIds })
+          });
+          
+          if (selectRes.ok) {
+            logger.log('Files selected successfully, waiting for download...');
+            // Nastavi sa čekanjem
+          } else {
+            const errorText = await selectRes.text();
+            logger.error(`Failed to select files: ${selectRes.status} ${errorText}`);
+          }
+        }
+      }
+      
+      // Status: "downloaded" = completed
+      if (statusText === 'downloaded' || torrentInfo.status === 2) {
         // Torrent je završen, uzmi prvi fajl
         if (torrentInfo.files && torrentInfo.files.length > 0) {
           const mainFile = torrentInfo.files.find(f => f.selected === 1) || torrentInfo.files[0];
@@ -280,8 +321,8 @@ async function getTorrentDownloadLink(torrentId, maxRetries = 10, delayMs = 2000
           }
         }
         return null;
-      } else if (torrentInfo.status === 3) {
-        logger.error('Torrent download failed on RD');
+      } else if (statusText === 'error' || statusText === 'virus' || torrentInfo.status === 3) {
+        logger.error(`Torrent download failed on RD with status: ${statusText}`);
         return null;
       }
 
