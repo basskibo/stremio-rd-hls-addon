@@ -5,6 +5,7 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { unrestrictRD, unrestrictRDFromId } from './rd_helper.js'; // tvoj helper za RD
+import logger from './logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,7 +34,7 @@ let ffmpegProcess = null;
 // Stremio addon endpoint
 app.get('/stream/:type/:id.json', async (req, res) => {
     const { type, id } = req.params;
-    console.log(`Request for stream: type=${type}, id=${id}`);
+    logger.log(`Request for stream: type=${type}, id=${id}`);
   
     // TODO: OVDE mapirati Stremio ID na stvarni RD link
     const rdLink = await unrestrictRDFromId(id); // napiši funkciju koja vraća direktan link
@@ -83,13 +84,13 @@ app.get('/start', async (req, res) => {
       `${HLS_DIR}/stream.m3u8`
     ]);
 
-    ffmpegProcess.stderr.on('data', d => console.log(d.toString()));
+    ffmpegProcess.stderr.on('data', d => logger.debug('FFmpeg:', d.toString()));
 
     // Kada se pokrene, redirectuj na HLS playlist
     res.redirect(`/stream/stream.m3u8`);
 
   } catch (err) {
-    console.error(err);
+    logger.error('Failed to start stream:', err);
     res.status(500).send('Failed to start stream');
   }
 });
@@ -99,5 +100,5 @@ app.use("/stream", express.static(HLS_DIR));
 
 // Pokretanje servera
 app.listen(PORT, () => {
-  console.log(`Server running at http://${IPv4}:${PORT}`);
+  logger.log(`Server running at http://${IPv4}:${PORT}`);
 });

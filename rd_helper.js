@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import logger from './logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -9,7 +10,7 @@ const TMDB_API_KEY = "f593842b5c3424753cb2fec85a21b46f"; // stavi ovde svoj TMDb
 
 export async function unrestrictRD(url) {
   try {
-    console.log('UNRESTRICT RD', url)
+    logger.log('UNRESTRICT RD', url)
     const res = await fetch(
       'https://api.real-debrid.com/rest/1.0/unrestrict/link',
       {
@@ -27,10 +28,10 @@ export async function unrestrictRD(url) {
     }
   
     const data = await res.json();
-    console.log('DATA' , data)
+    logger.log('DATA', data)
     return data.download;
   } catch (err) {
-    console.error('Error in unrestrictRD:', err);
+    logger.error('Error in unrestrictRD:', err);
     return null;
   }
   }
@@ -65,7 +66,7 @@ export async function unrestrictRD(url) {
       } else if (findData.movie_results && findData.movie_results.length > 0) {
         tmdbId = findData.movie_results[0].id;
       } else {
-        console.warn('TMDb ID not found for', imdbId);
+        logger.warn('TMDb ID not found for', imdbId);
         return null;
       }
   
@@ -76,15 +77,15 @@ export async function unrestrictRD(url) {
           `https://api.themoviedb.org/3/tv/${tmdbId}/season/${season}/episode/${episode}?api_key=${TMDB_API_KEY}`
         );
         const epData = await epResp.json();
-        console.log('epData', epData)
+        logger.log('epData', epData)
         
         // Sačuvaj epData u fajl
         const epDataFile = path.join(__dirname, 'epData.json');
         fs.writeFileSync(epDataFile, JSON.stringify(epData, null, 2), 'utf8');
-        console.log(`epData saved to ${epDataFile}`);
+        logger.log(`epData saved to ${epDataFile}`);
 
         if (!epData.name) {
-          console.warn('Episode not found:', stremioId);
+          logger.warn('Episode not found:', stremioId);
           return null;
         }
         query = `${findData.tv_results[0].name} S${season}E${episode} ${epData.name}`;
@@ -93,21 +94,21 @@ export async function unrestrictRD(url) {
         query = findData.movie_results[0].title;
       }
   
-      console.log('QUERY', query)
-      console.log('findData', findData)
-      console.log('tmdbId', tmdbId)
-      console.log('imdbId', imdbId)
-      console.log('season', season)
-      console.log('episode', episode)
-      console.log('parts', parts)
-      console.log('stremioId', stremioId)
+      logger.debug('QUERY', query)
+      logger.debug('findData', findData)
+      logger.debug('tmdbId', tmdbId)
+      logger.debug('imdbId', imdbId)
+      logger.debug('season', season)
+      logger.debug('episode', episode)
+      logger.debug('parts', parts)
+      logger.debug('stremioId', stremioId)
       // 3️⃣ Search na Real-Debrid (ili unapred definisan link) → za sada hardkod test link
       // Ovde ide tvoja logika za RD API / torrent search
       // Za primer koristimo unrestrictRD na fiktivnom linku
       const rdUrl = await unrestrictRD(query); // unrestrictRD može da prihvati query string ili ID sa RD
       return rdUrl;
     } catch (err) {
-      console.error('Error in unrestrictRDFromId:', err);
+      logger.error('Error in unrestrictRDFromId:', err);
       return null;
     }
   }

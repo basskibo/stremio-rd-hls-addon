@@ -2,6 +2,7 @@ import pkg from 'stremio-addon-sdk';
 const { addonBuilder, serveHTTP } = pkg;
 import { unrestrictRDFromId } from './rd_helper.js';
 import os from 'os';
+import logger from './logger.js';
 
 // Dohvati lokalni IPv4
 const interfaces = os.networkInterfaces();
@@ -31,13 +32,13 @@ const manifest = {
 const builder = new addonBuilder(manifest);
 
 builder.defineStreamHandler(async ({ id, type }) => {
-    console.log(`Request for stream: type=${type}, id=${id}`);
+    logger.log(`Request for stream: type=${type}, id=${id}`);
   
     try {
       // Map Stremio ID -> RD link
       const rdLink = await unrestrictRDFromId(id);
       if (!rdLink) {
-        console.log(`No RD link found for id: ${id}`);
+        logger.log(`No RD link found for id: ${id}`);
         return { streams: [] };
       }
     
@@ -54,7 +55,7 @@ builder.defineStreamHandler(async ({ id, type }) => {
         ]
       };
     } catch (err) {
-      console.error('Error in stream handler:', err);
+      logger.error('Error in stream handler:', err);
       return { streams: [] };
     }
 });
@@ -62,4 +63,4 @@ builder.defineStreamHandler(async ({ id, type }) => {
 
 serveHTTP(builder.getInterface(), { port: 3001 });
 
-console.log('Stremio addon running at http://localhost:3001/manifest.json');
+logger.log('Stremio addon running at http://localhost:3001/manifest.json');

@@ -1,2 +1,4 @@
 node_modules
 hls
+logs
+epData.json
