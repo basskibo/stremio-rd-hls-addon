@@ -35,8 +35,8 @@ builder.defineStreamHandler(async ({ id, type }) => {
     logger.log(`Request for stream: type=${type}, id=${id}`);
   
     try {
-      // Map Stremio ID -> RD link
-      const rdLink = await unrestrictRDFromId(id);
+      // Map Stremio ID -> RD link (koristi Torrentio + RD unrestrict)
+      const rdLink = await unrestrictRDFromId(id, type);
       if (!rdLink) {
         logger.log(`No RD link found for id: ${id}`);
         return { streams: [] };
