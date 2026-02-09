@@ -103,6 +103,7 @@ const addonServer = serveHTTP(builder.getInterface(), { port: PORT });
 // kroz Express na drugom portu (3001)
   
 // Funkcija za čišćenje HLS foldera
+// NE briše playlist dok FFmpeg radi - samo stare segmente
 function clearHLSFolder() {
   try {
     if (!fs.existsSync(HLS_DIR)) {
@@ -111,16 +112,22 @@ function clearHLSFolder() {
     }
     
     const files = fs.readdirSync(HLS_DIR);
+    let deletedCount = 0;
     files.forEach(file => {
-      const filePath = path.join(HLS_DIR, file);
-      try {
-        fs.unlinkSync(filePath);
-        logger.debug(`Deleted HLS file: ${file}`);
-      } catch (err) {
-        logger.warn(`Failed to delete HLS file ${file}:`, err.message);
+      // Ne briši playlist dok FFmpeg radi - on će ga ažurirati
+      // Samo briši stare .ts segmente
+      if (file.endsWith('.ts')) {
+        const filePath = path.join(HLS_DIR, file);
+        try {
+          fs.unlinkSync(filePath);
+          deletedCount++;
+          logger.debug(`Deleted HLS segment: ${file}`);
+        } catch (err) {
+          logger.warn(`Failed to delete HLS segment ${file}:`, err.message);
+        }
       }
     });
-    logger.log('HLS folder cleared');
+    logger.log(`HLS folder cleared: deleted ${deletedCount} old segments`);
   } catch (err) {
     logger.error('Error clearing HLS folder:', err);
   }
@@ -135,15 +142,36 @@ app.get('/start', async (req, res) => {
     // Zaustavi stari FFmpeg proces ako postoji
     if (ffmpegProcess) {
       logger.log('Stopping previous FFmpeg process...');
-      ffmpegProcess.kill("SIGKILL");
+      try {
+        ffmpegProcess.kill("SIGTERM");
+        // Sačekaj da se proces zaista završi (SIGTERM je blaži od SIGKILL)
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Ako još uvek radi, koristi SIGKILL
+        if (ffmpegProcess && !ffmpegProcess.killed) {
+          logger.warn('FFmpeg process still running, using SIGKILL...');
+          ffmpegProcess.kill("SIGKILL");
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      } catch (err) {
+        logger.warn('Error stopping FFmpeg process:', err.message);
+      }
       ffmpegProcess = null;
-      // Sačekaj malo da se proces zaista završi
-      await new Promise(resolve => setTimeout(resolve, 500));
     }
     
-    // Očisti HLS folder pre pokretanja novog streama
-    logger.log('Clearing HLS folder...');
+    // Očisti HLS folder pre pokretanja novog streama (samo stare segmente, ne playlist)
+    logger.log('Clearing old HLS segments...');
     clearHLSFolder();
+    
+    // Obriši stari playlist ako postoji (FFmpeg će kreirati novi)
+    const playlistPath = path.join(HLS_DIR, 'stream.m3u8');
+    if (fs.existsSync(playlistPath)) {
+      try {
+        fs.unlinkSync(playlistPath);
+        logger.debug('Deleted old playlist');
+      } catch (err) {
+        logger.warn('Failed to delete old playlist:', err.message);
+      }
+    }
     
     // Dobij direktan link sa RD
     const directUrl = await unrestrictRD(urlParam);
@@ -154,7 +182,8 @@ app.get('/start', async (req, res) => {
 
     logger.log(`Starting FFmpeg stream for: ${directUrl.substring(0, 50)}...`);
     
-    // FFmpeg HLS konfiguracija - koristi delete_segments da briše stare segmente
+    // FFmpeg HLS konfiguracija - koristi event playlist type da se playlist kreira odmah
+    // hls_playlist_type event - playlist se ažurira dok se segmenti dodaju (live streaming)
     ffmpegProcess = spawn('ffmpeg', [
       '-y',
       '-i', directUrl,
@@ -170,11 +199,11 @@ app.get('/start', async (req, res) => {
       '-ac', '2',
       '-f', 'hls',
       '-hls_time', '6',
-      '-hls_list_size', '10', // Zadrži samo poslednjih 10 segmenata u playlisti
-      '-hls_flags', 'delete_segments+program_date_time', // Briši stare segmente
+      '-hls_list_size', '20', // Zadrži poslednjih 20 segmenata u playlisti
+      '-hls_flags', 'delete_segments+program_date_time+independent_segments', // Briši stare segmente, dodaj program_date_time i independent_segments
       '-hls_segment_type', 'mpegts',
       '-hls_segment_filename', `${HLS_DIR}/stream%03d.ts`, // Eksplicitno ime fajlova
-      '-hls_playlist_type', 'vod',
+      '-hls_playlist_type', 'event', // Event type - playlist se kreira odmah i ažurira se dok se segmenti dodaju
       `${HLS_DIR}/stream.m3u8`
     ], {
       stdio: ['ignore', 'pipe', 'pipe'] // Redirect stdout i stderr
@@ -191,23 +220,36 @@ app.get('/start', async (req, res) => {
       ffmpegProcess = null;
     });
 
-    // Sačekaj da se FFmpeg pokrene i kreira prvi segment i playlist
+    // Sačekaj da se FFmpeg pokrene i kreira playlist i prvi segment
+    // Event playlist type kreira playlist odmah, ali treba da sačekamo prvi segment
     let playlistReady = false;
-    for (let i = 0; i < 10; i++) {
+    let segmentReady = false;
+    for (let i = 0; i < 30; i++) { // Povećano na 15 sekundi (30 * 500ms)
       await new Promise(resolve => setTimeout(resolve, 500));
       const playlistPath = path.join(HLS_DIR, 'stream.m3u8');
+      const firstSegmentPath = path.join(HLS_DIR, 'stream000.ts');
+      
       if (fs.existsSync(playlistPath)) {
         const stats = fs.statSync(playlistPath);
         if (stats.size > 0) {
           playlistReady = true;
-          logger.log('HLS playlist created and ready');
-          break;
+          // Proveri da li postoji prvi segment
+          if (fs.existsSync(firstSegmentPath)) {
+            const segmentStats = fs.statSync(firstSegmentPath);
+            if (segmentStats.size > 0) {
+              segmentReady = true;
+              logger.log('HLS playlist and first segment created and ready');
+              break;
+            }
+          }
         }
       }
     }
     
     if (!playlistReady) {
-      logger.warn('HLS playlist not ready after 5 seconds, redirecting anyway...');
+      logger.warn('HLS playlist not ready after 15 seconds');
+    } else if (!segmentReady) {
+      logger.warn('HLS playlist ready but first segment not ready yet');
     }
     
     // Kada se pokrene, redirectuj na HLS playlist
