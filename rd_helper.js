@@ -1,3 +1,10 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const TMDB_API_KEY = "f593842b5c3424753cb2fec85a21b46f"; // stavi ovde svoj TMDb API key
 
 export async function unrestrictRD(url) {
@@ -70,6 +77,11 @@ export async function unrestrictRD(url) {
         );
         const epData = await epResp.json();
         console.log('epData', epData)
+        
+        // Sačuvaj epData u fajl
+        const epDataFile = path.join(__dirname, 'epData.json');
+        fs.writeFileSync(epDataFile, JSON.stringify(epData, null, 2), 'utf8');
+        console.log(`epData saved to ${epDataFile}`);
 
         if (!epData.name) {
           console.warn('Episode not found:', stremioId);
