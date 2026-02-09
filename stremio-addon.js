@@ -1,5 +1,6 @@
-const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
-const { unrestrictRDFromId } = require('./rd_helper');
+import pkg from 'stremio-addon-sdk';
+const { addonBuilder, serveHTTP } = pkg;
+import { unrestrictRDFromId } from './rd_helper.js';
 
 const PC_IP = '192.168.1.16'; // ili IPv4 iz server.js (možeš dinamički ako želiš)
 

@@ -1,9 +1,13 @@
-const express = require('express');
-const { spawn } = require('child_process');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const { unrestrictRD } = require('./rd_helper'); // tvoj helper za RD
+import express from 'express';
+import { spawn } from 'child_process';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { unrestrictRD, unrestrictRDFromId } from './rd_helper.js'; // tvoj helper za RD
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 3000;

@@ -1,4 +1,3 @@
-const fetch = require("node-fetch");
 const TMDB_API_KEY = "f593842b5c3424753cb2fec85a21b46f"; // stavi ovde svoj TMDb API key
 
 export async function unrestrictRD(url) {
@@ -43,7 +42,7 @@ export async function unrestrictRD(url) {
   
       // 1️⃣ find TMDb ID
       const findResp = await fetch(
-        `https://api.themoviedb.org/3/find/${imdbId}?api_key=${TMDB_KEY}&external_source=imdb_id`
+        `https://api.themoviedb.org/3/find/${imdbId}?api_key=${TMDB_API_KEY}&external_source=imdb_id`
       );
       const findData = await findResp.json();
   
@@ -61,7 +60,7 @@ export async function unrestrictRD(url) {
       let query = '';
       if (season && episode) {
         const epResp = await fetch(
-          `https://api.themoviedb.org/3/tv/${tmdbId}/season/${season}/episode/${episode}?api_key=${TMDB_KEY}`
+          `https://api.themoviedb.org/3/tv/${tmdbId}/season/${season}/episode/${episode}?api_key=${TMDB_API_KEY}`
         );
         const epData = await epResp.json();
         if (!epData.name) {
@@ -86,6 +85,4 @@ export async function unrestrictRD(url) {
   }
   
 
-  module.exports = {
-    unrestrictRDFromId
-  };
+export { unrestrictRDFromId };
