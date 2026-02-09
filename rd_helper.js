@@ -141,20 +141,47 @@ export async function unrestrictRD(url) {
         return null;
       }
       
-      // Uzmi prvi link (obično najbolji kvalitet) i unrestrictuj ga kroz RD
+      // Uzmi prvi stream (obično najbolji kvalitet)
       const firstStream = torrentioLinks[0];
-      if (!firstStream || !firstStream.url) {
+      if (!firstStream || !firstStream.infoHash) {
         logger.error('Invalid stream data from Torrentio:', firstStream);
         return null;
       }
       
-      const torrentioLink = firstStream.url;
-      logger.log(`Unrestricting Torrentio link through RD: ${torrentioLink.substring(0, 50)}...`);
-      logger.debug(`Stream info: ${JSON.stringify(firstStream, null, 2)}`);
+      const infoHash = firstStream.infoHash;
+      logger.log(`Processing stream: ${firstStream.name} (infoHash: ${infoHash.substring(0, 16)}...)`);
       
-      const rdDirectLink = await unrestrictRD(torrentioLink);
+      // 1. Prvo proveri RD instant availability sa infoHash-om
+      logger.log('Checking RD instant availability...');
+      const instantFile = await checkRDInstantAvailability(infoHash);
+      
+      if (instantFile && instantFile.rd && instantFile.rd.length > 0) {
+        // RD već ima cached torrent - uzmi direktan link
+        logger.log('Found instant availability on RD!');
+        // Instant availability vraća info o fajlovima, treba da dodamo torrent i uzmemo link
+        // Za sada koristimo magnet link pristup
+      }
+      
+      // 2. Ako nema instant availability, dodaj magnet link na RD
+      if (!firstStream.magnetLink) {
+        logger.error('No magnet link available for stream');
+        return null;
+      }
+      
+      logger.log(`Adding magnet link to RD: ${firstStream.magnetLink.substring(0, 50)}...`);
+      const torrentId = await addTorrentToRD(firstStream.magnetLink);
+      
+      if (!torrentId) {
+        logger.error('Failed to add torrent to RD');
+        return null;
+      }
+      
+      // 3. Čekaj da se torrent download završi i uzmi direktan link
+      logger.log('Waiting for torrent to be ready on RD...');
+      const rdDirectLink = await getTorrentDownloadLink(torrentId);
+      
       if (!rdDirectLink) {
-        logger.error('Failed to unrestrict link through RD');
+        logger.error('Failed to get direct download link from RD');
         return null;
       }
       
@@ -565,21 +592,39 @@ async function getStreamLinksFromTorrentio(stremioId, type) {
     // Loguj strukturu prvog streama za debugging
     if (data.streams[0]) {
       logger.debug(`First stream structure: ${JSON.stringify(Object.keys(data.streams[0]), null, 2)}`);
-      logger.debug(`First stream data: ${JSON.stringify(data.streams[0], null, 2)}`);
     }
     
-    // Vrati stream linkove (Torrentio vraća streams sa 'url' property-jem)
-    const streamLinks = data.streams.map(s => ({
-      name: s.name || s.title || 'Unknown',
-      url: s.url,
-      quality: s.quality || 'unknown',
-      infoHash: s.infoHash || null
-    })).filter(s => s.url); // Filtriraj samo one sa URL-om
+    // Torrentio vraća streams sa infoHash i sources (tracker URLs), ne direktnim URL-ovima
+    // Treba da kreiramo magnet link ili koristimo infoHash za RD instant availability
+    const streamLinks = data.streams.map(s => {
+      const infoHash = s.infoHash;
+      const sources = s.sources || [];
+      const fileIdx = s.fileIdx;
+      const filename = s.behaviorHints?.filename || s.title || 'Unknown';
+      
+      // Kreiraj magnet link iz infoHash i sources
+      let magnetLink = null;
+      if (infoHash) {
+        const trackers = sources.filter(src => src.startsWith('http://') || src.startsWith('https://') || src.startsWith('udp://'));
+        const trackerParams = trackers.map(t => `tr=${encodeURIComponent(t)}`).join('&');
+        magnetLink = `magnet:?xt=urn:btih:${infoHash}${trackerParams ? '&' + trackerParams : ''}`;
+      }
+      
+      return {
+        name: s.name || 'Unknown',
+        title: s.title || filename,
+        infoHash: infoHash,
+        fileIdx: fileIdx,
+        filename: filename,
+        magnetLink: magnetLink,
+        sources: sources
+      };
+    }).filter(s => s.infoHash); // Filtriraj samo one sa infoHash-om
     
-    logger.log(`Found ${streamLinks.length} valid stream links from Torrentio`);
+    logger.log(`Found ${streamLinks.length} valid streams from Torrentio (with infoHash)`);
     
     if (streamLinks.length === 0) {
-      logger.error('No valid stream URLs found in Torrentio response');
+      logger.error('No valid streams with infoHash found in Torrentio response');
       return null;
     }
     
