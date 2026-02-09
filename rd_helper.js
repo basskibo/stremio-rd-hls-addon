@@ -131,7 +131,7 @@ export async function unrestrictRD(url) {
       logger.debug('stremioId', stremioId)
       
       // 3️⃣ Prvo proveri postojeće torrentove na RD account-u
-      logger.log('Checking existing RD torrents for query:', query);
+      logger.log(`Checking existing RD torrents for query: ${query}`);
       const existingTorrentResult = await searchRDTorrents(query);
       
       if (existingTorrentResult) {
@@ -322,7 +322,7 @@ async function checkRDInstantAvailability(hash) {
  */
 async function searchRDTorrents(query) {
   try {
-    logger.log('Searching existing RD torrents for:', query);
+    logger.log(`Searching existing RD torrents for: ${query}`);
     
     const res = await fetch(`${RD_API_BASE}/torrents`, {
       headers: {
@@ -330,37 +330,100 @@ async function searchRDTorrents(query) {
       }
     });
 
+    const status = res.status;
+    logger.log(`RD torrents API response status: ${status}`);
+    
+    if (status === 401) {
+      logger.error('RD API authentication failed - check your API token!');
+      return null;
+    }
+
     if (!res.ok) {
-      logger.error('Failed to get RD torrents list:', res.status);
+      const errorText = await res.text();
+      logger.error('Failed to get RD torrents list:', status, errorText);
       return null;
     }
 
     const torrents = await res.json();
-    logger.debug(`Found ${torrents.length} torrents on RD account`);
+    logger.log(`Found ${torrents.length} torrents on RD account`);
+    
+    // Loguj prvih 5 torrentova za debugging
+    if (torrents.length > 0) {
+      const sampleTorrents = torrents.slice(0, 5).map(t => ({
+        id: t.id,
+        filename: t.filename,
+        status: t.status,
+        hasLinks: !!(t.links && t.links.length > 0)
+      }));
+      logger.debug(`Sample RD torrents: ${JSON.stringify(sampleTorrents, null, 2)}`);
+      
+      // Loguj sve nazive torrentova za debugging
+      const allFilenames = torrents.map(t => t.filename).filter(Boolean);
+      logger.debug(`All RD torrent filenames (first 10): ${allFilenames.slice(0, 10).join(', ')}`);
+    } else {
+      logger.warn('No torrents found on RD account - account might be empty or API issue');
+    }
     
     // Pretraži torrentove po nazivu (case-insensitive)
+    // Pokušaj različite varijante pretrage
     const queryLower = query.toLowerCase();
-    const matchingTorrent = torrents.find(t => 
+    const queryParts = queryLower.split(' ').filter(p => p.length > 2); // Ukloni kratke reči
+    
+    // Prvo pokušaj tačno poklapanje
+    let matchingTorrent = torrents.find(t => 
       t.filename && t.filename.toLowerCase().includes(queryLower)
     );
     
+    // Ako nema tačnog, pokušaj sa delovima query-ja
+    if (!matchingTorrent && queryParts.length > 0) {
+      matchingTorrent = torrents.find(t => {
+        if (!t.filename) return false;
+        const filenameLower = t.filename.toLowerCase();
+        // Proveri da li svi delovi query-ja postoje u nazivu
+        return queryParts.every(part => filenameLower.includes(part));
+      });
+    }
+    
+    // Ako i dalje nema, pokušaj samo sa glavnim delovima (serija + sezona/epizoda)
+    if (!matchingTorrent) {
+      const seasonEpisodeMatch = query.match(/s(\d+)e(\d+)/i);
+      if (seasonEpisodeMatch) {
+        const season = seasonEpisodeMatch[1];
+        const episode = seasonEpisodeMatch[2];
+        const seriesName = query.split(/s\d+e\d+/i)[0].trim().toLowerCase();
+        
+        matchingTorrent = torrents.find(t => {
+          if (!t.filename) return false;
+          const filenameLower = t.filename.toLowerCase();
+          return filenameLower.includes(seriesName) && 
+                 (filenameLower.includes(`s${season}e${episode}`) || 
+                  filenameLower.includes(`s${season.padStart(2, '0')}e${episode.padStart(2, '0')}`));
+        });
+      }
+    }
+    
     if (matchingTorrent) {
-      logger.log('Found matching torrent on RD:', matchingTorrent.filename, 'ID:', matchingTorrent.id);
+      logger.log(`Found matching torrent on RD - ID: ${matchingTorrent.id}, Filename: ${matchingTorrent.filename}, Status: ${matchingTorrent.status}, Links: ${matchingTorrent.links?.length || 0}`);
       
       // Ako je torrent već završen, uzmi direktan link
       if (matchingTorrent.status === 2 && matchingTorrent.links && matchingTorrent.links.length > 0) {
-        logger.log('Torrent already completed, using existing link');
+        logger.log(`Torrent already completed, using existing link: ${matchingTorrent.links[0]}`);
         return matchingTorrent.links[0];
       }
       
       // Ako je u toku, vrati ID da se čeka
+      logger.log(`Torrent in progress (status: ${matchingTorrent.status}), returning ID to wait: ${matchingTorrent.id}`);
       return matchingTorrent.id;
     }
     
-    logger.debug('No matching torrent found on RD account');
+    logger.warn(`No matching torrent found on RD account for query: ${query}`);
+    logger.debug(`Query parts used for search: ${JSON.stringify(queryParts)}`);
+    if (torrents.length > 0) {
+      logger.debug(`Searched through ${torrents.length} torrents but no match found`);
+    }
     return null;
   } catch (err) {
-    logger.error('Error searching RD torrents:', err);
+    logger.error('Error searching RD torrents:', err.message, err.stack);
     return null;
   }
 }
@@ -411,11 +474,54 @@ async function searchTorrent(query, torrentHash = null) {
   }
 }
 
+/**
+ * Pokušava da dobije magnet link za Stremio ID
+ * @param {string} stremioId - Stremio ID (npr. "tt9335498:5:6")
+ * @param {string} query - Search query string
+ * @returns {Promise<string|null>} Magnet link ili null
+ */
+async function getMagnetLinkFromStremioId(stremioId, query) {
+  try {
+    logger.log(`Attempting to get magnet link for Stremio ID: ${stremioId}`);
+    
+    // Opcija 1: Proveri mapping fajl
+    const mappingFile = path.join(__dirname, 'torrent-mapping.json');
+    if (fs.existsSync(mappingFile)) {
+      const mapping = JSON.parse(fs.readFileSync(mappingFile, 'utf8'));
+      if (mapping[stremioId]) {
+        logger.log('Found magnet link in mapping file');
+        return mapping[stremioId];
+      }
+      if (mapping[query]) {
+        logger.log('Found magnet link in mapping file for query');
+        return mapping[query];
+      }
+    }
+    
+    // Opcija 2: Koristi Torrentio addon API (ako je dostupan)
+    // Možeš koristiti Torrentio addon URL da dobiješ stream info koji sadrži magnet link
+    // Primer: https://torrentio.strem.fun/.../stream/{type}/{id}.json
+    
+    // Opcija 3: Koristi torrent search API
+    // Možeš integrisati 1337x, RARBG, ili drugi torrent search API
+    
+    logger.warn('No magnet link found. Create torrent-mapping.json file with format:');
+    logger.warn(`{ "${stremioId}": "magnet:?xt=urn:btih:..." }`);
+    logger.warn(`or { "${query}": "magnet:?xt=urn:btih:..." }`);
+    
+    return null;
+  } catch (err) {
+    logger.error('Error getting magnet link:', err);
+    return null;
+  }
+}
+
 export { 
   unrestrictRDFromId, 
   addTorrentToRD, 
   getTorrentDownloadLink, 
   searchTorrent,
   searchRDTorrents,
-  checkRDInstantAvailability
+  checkRDInstantAvailability,
+  getMagnetLinkFromStremioId
 };
