@@ -79,6 +79,15 @@ export async function unrestrictRD(url) {
         query = findData.movie_results[0].title;
       }
   
+      console.log('QUERY', query)
+      console.log('epData', epData)
+      console.log('findData', findData)
+      console.log('tmdbId', tmdbId)
+      console.log('imdbId', imdbId)
+      console.log('season', season)
+      console.log('episode', episode)
+      console.log('parts', parts)
+      console.log('stremioId', stremioId)
       // 3️⃣ Search na Real-Debrid (ili unapred definisan link) → za sada hardkod test link
       // Ovde ide tvoja logika za RD API / torrent search
       // Za primer koristimo unrestrictRD na fiktivnom linku
