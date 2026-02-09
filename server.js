@@ -104,6 +104,8 @@ app.get('/start', async (req, res) => {
     }
 
     logger.log(`Starting FFmpeg stream for: ${directUrl.substring(0, 50)}...`);
+    
+    // FFmpeg HLS konfiguracija - koristi delete_segments da briše stare segmente
     ffmpegProcess = spawn('ffmpeg', [
       '-y',
       '-i', directUrl,
@@ -119,10 +121,15 @@ app.get('/start', async (req, res) => {
       '-ac', '2',
       '-f', 'hls',
       '-hls_time', '6',
-      '-hls_list_size', '0',
+      '-hls_list_size', '10', // Zadrži samo poslednjih 10 segmenata u playlisti
+      '-hls_flags', 'delete_segments+program_date_time', // Briši stare segmente
+      '-hls_segment_type', 'mpegts',
+      '-hls_segment_filename', `${HLS_DIR}/stream%03d.ts`, // Eksplicitno ime fajlova
       '-hls_playlist_type', 'vod',
       `${HLS_DIR}/stream.m3u8`
-    ]);
+    ], {
+      stdio: ['ignore', 'pipe', 'pipe'] // Redirect stdout i stderr
+    });
 
     ffmpegProcess.stderr.on('data', d => logger.debug('FFmpeg:', d.toString()));
     
@@ -135,8 +142,24 @@ app.get('/start', async (req, res) => {
       ffmpegProcess = null;
     });
 
-    // Sačekaj malo da se FFmpeg pokrene i kreira prvi segment
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    // Sačekaj da se FFmpeg pokrene i kreira prvi segment i playlist
+    let playlistReady = false;
+    for (let i = 0; i < 10; i++) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const playlistPath = path.join(HLS_DIR, 'stream.m3u8');
+      if (fs.existsSync(playlistPath)) {
+        const stats = fs.statSync(playlistPath);
+        if (stats.size > 0) {
+          playlistReady = true;
+          logger.log('HLS playlist created and ready');
+          break;
+        }
+      }
+    }
+    
+    if (!playlistReady) {
+      logger.warn('HLS playlist not ready after 5 seconds, redirecting anyway...');
+    }
     
     // Kada se pokrene, redirectuj na HLS playlist
     res.redirect(`/stream/stream.m3u8`);
@@ -147,8 +170,24 @@ app.get('/start', async (req, res) => {
   }
 });
 
-// Statika za HLS fajlove
-app.use("/stream", express.static(HLS_DIR));
+// Statika za HLS fajlove - CORS headers za cross-origin pristup
+app.use("/stream", (req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+}, express.static(HLS_DIR, {
+  setHeaders: (res, path) => {
+    if (path.endsWith('.m3u8')) {
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+    } else if (path.endsWith('.ts')) {
+      res.setHeader('Content-Type', 'video/mp2t');
+    }
+  }
+}));
 
 // Pokretanje servera
 app.listen(PORT, () => {

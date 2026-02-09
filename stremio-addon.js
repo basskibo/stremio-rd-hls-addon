@@ -4,20 +4,30 @@ import { unrestrictRDFromId } from './rd_helper.js';
 import os from 'os';
 import logger from './logger.js';
 
-// Dohvati lokalni IPv4
-const interfaces = os.networkInterfaces();
-let IPv4 = null;
-for (const name of Object.keys(interfaces)) {
-  for (const iface of interfaces[name]) {
-    if (iface.family === 'IPv4' && !iface.internal) {
-      IPv4 = iface.address;
-      break;
-    }
-  }
-  if (IPv4) break;
-}
-
+// Koristi ngrok URL ako je postavljen, inače lokalnu IP
+const NGROK_URL = process.env.NGROK_URL || null; // Primer: "https://abc123.ngrok.io"
 const SERVER_PORT = 3000; // Port na kome radi server.js
+
+let SERVER_BASE_URL = null;
+if (NGROK_URL) {
+  SERVER_BASE_URL = NGROK_URL;
+  logger.log(`Using ngrok URL: ${NGROK_URL}`);
+} else {
+  // Dohvati lokalni IPv4
+  const interfaces = os.networkInterfaces();
+  let IPv4 = null;
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        IPv4 = iface.address;
+        break;
+      }
+    }
+    if (IPv4) break;
+  }
+  SERVER_BASE_URL = `http://${IPv4}:${SERVER_PORT}`;
+  logger.log(`Using local IP: ${SERVER_BASE_URL}`);
+}
 
 const manifest = {
   id: 'org.local.rd-hls',
