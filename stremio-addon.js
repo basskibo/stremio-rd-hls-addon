@@ -5,28 +5,31 @@ import os from 'os';
 import logger from './logger.js';
 
 // Koristi ngrok URL ako je postavljen, inače lokalnu IP
+// VAŽNO: Ngrok treba da pokazuje na PORT 3000 (server.js), ne 3001!
 const NGROK_URL = process.env.NGROK_URL || null; // Primer: "https://abc123.ngrok.io"
-const SERVER_PORT = 3000; // Port na kome radi server.js
+const SERVER_PORT = 3000; // Port na kome radi server.js (HLS streaming server)
+
+// Dohvati lokalni IPv4 (za fallback)
+const interfaces = os.networkInterfaces();
+let IPv4 = null;
+for (const name of Object.keys(interfaces)) {
+  for (const iface of interfaces[name]) {
+    if (iface.family === 'IPv4' && !iface.internal) {
+      IPv4 = iface.address;
+      break;
+    }
+  }
+  if (IPv4) break;
+}
 
 let SERVER_BASE_URL = null;
 if (NGROK_URL) {
   SERVER_BASE_URL = NGROK_URL;
-  logger.log(`Using ngrok URL: ${NGROK_URL}`);
+  logger.log(`Using ngrok URL for streaming server: ${NGROK_URL}`);
+  logger.log(`NOTE: Make sure ngrok points to port ${SERVER_PORT} (server.js), not 3001!`);
 } else {
-  // Dohvati lokalni IPv4
-  const interfaces = os.networkInterfaces();
-  let IPv4 = null;
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        IPv4 = iface.address;
-        break;
-      }
-    }
-    if (IPv4) break;
-  }
   SERVER_BASE_URL = `http://${IPv4}:${SERVER_PORT}`;
-  logger.log(`Using local IP: ${SERVER_BASE_URL}`);
+  logger.log(`Using local IP for streaming server: ${SERVER_BASE_URL}`);
 }
 
 const manifest = {
@@ -52,8 +55,9 @@ builder.defineStreamHandler(async ({ id, type }) => {
         return { streams: [] };
       }
     
-      // URL koji pokreće FFmpeg stream na server.js
-      const startUrl = `http://${IPv4}:${SERVER_PORT}/start?url=${encodeURIComponent(rdLink)}`;
+      // URL koji pokreće FFmpeg stream na server.js (port 3000)
+      const startUrl = `${SERVER_BASE_URL}/start?url=${encodeURIComponent(rdLink)}`;
+      logger.log(`Returning stream URL: ${startUrl}`);
       
       return {
         streams: [

@@ -4,8 +4,10 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { unrestrictRD, unrestrictRDFromId } from './rd_helper.js'; // tvoj helper za RD
+import { unrestrictRD, unrestrictRDFromId } from './rd_helper.js';
 import logger from './logger.js';
+import pkg from 'stremio-addon-sdk';
+const { addonBuilder } = pkg;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,29 +31,87 @@ for (const name of Object.keys(interfaces)) {
   }
 }
 
+// Koristi ngrok URL ako je postavljen, inače lokalnu IP
+const NGROK_URL = process.env.NGROK_URL || null;
+let SERVER_BASE_URL = null;
+if (NGROK_URL) {
+  SERVER_BASE_URL = NGROK_URL;
+  logger.log(`Using ngrok URL: ${NGROK_URL}`);
+} else {
+  SERVER_BASE_URL = `http://${IPv4}:${PORT}`;
+  logger.log(`Using local IP: ${SERVER_BASE_URL}`);
+}
+
 let ffmpegProcess = null;
 
-// Stremio addon endpoint
-app.get('/stream/:type/:id.json', async (req, res) => {
-    const { type, id } = req.params;
-    logger.log(`Request for stream: type=${type}, id=${id}`);
+// Stremio addon manifest i stream handler
+const manifest = {
+  id: 'org.local.rd-hls',
+  version: '1.0.0',
+  name: 'Local RD HLS',
+  description: 'Streams via local FFmpeg server',
+  resources: ['stream'],
+  types: ['movie', 'series'],
+  catalogs: [],
+};
+
+const builder = new addonBuilder(manifest);
+
+builder.defineStreamHandler(async ({ id, type }) => {
+  logger.log(`Request for stream: type=${type}, id=${id}`);
   
-    // TODO: OVDE mapirati Stremio ID na stvarni RD link
-    const rdLink = await unrestrictRDFromId(id); // napiši funkciju koja vraća direktan link
-    if (!rdLink) return res.json({ streams: [] });
+  try {
+    const rdLink = await unrestrictRDFromId(id, type);
+    if (!rdLink) {
+      logger.log(`No RD link found for id: ${id}`);
+      return { streams: [] };
+    }
   
-    const startUrl = `http://${IPv4}:${PORT}/start?url=${encodeURIComponent(rdLink)}`;
-  
-    res.json({
+    const startUrl = `${SERVER_BASE_URL}/start?url=${encodeURIComponent(rdLink)}`;
+    logger.log(`Returning stream URL: ${startUrl}`);
+    
+    return {
       streams: [
         {
           name: 'Local PC (HLS)',
-          title: `RD → FFmpeg → HLS`,
+          title: 'RD → FFmpeg → HLS',
           url: startUrl
         }
       ]
-    });
-  });
+    };
+  } catch (err) {
+    logger.error('Error in stream handler:', err);
+    return { streams: [] };
+  }
+});
+
+// Stremio addon endpoints
+app.get('/manifest.json', (req, res) => {
+  res.json(builder.manifest());
+});
+
+app.get('/:resource/:type/:id.json', async (req, res) => {
+  const { resource, type, id } = req.params;
+  
+  if (resource === 'stream') {
+    try {
+      // Koristi interface objekat da dobiješ handler
+      const addonInterface = builder.getInterface();
+      const handler = addonInterface.stream;
+      if (handler) {
+        const result = await handler({ type, id });
+        res.json(result);
+      } else {
+        res.status(404).json({ error: 'Stream handler not found' });
+      }
+    } catch (err) {
+      logger.error('Error handling stream request:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  } else {
+    res.status(404).json({ error: 'Resource not found' });
+  }
+});
   
 // Funkcija za čišćenje HLS foldera
 function clearHLSFolder() {
@@ -191,5 +251,7 @@ app.use("/stream", (req, res, next) => {
 
 // Pokretanje servera
 app.listen(PORT, () => {
-  logger.log(`Server running at http://${IPv4}:${PORT}`);
+  logger.log(`Server running at ${SERVER_BASE_URL}`);
+  logger.log(`Stremio addon manifest: ${SERVER_BASE_URL}/manifest.json`);
+  logger.log(`Add this URL to Stremio: ${SERVER_BASE_URL}/manifest.json`);
 });
