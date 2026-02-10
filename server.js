@@ -182,45 +182,25 @@ app.get('/start', async (req, res) => {
 
     logger.log(`Starting FFmpeg stream for: ${directUrl.substring(0, 50)}...`);
     
-    // FFmpeg HLS konfiguracija - koristi event playlist type da se playlist kreira odmah
-    // hls_playlist_type event - playlist se ažurira dok se segmenti dodaju (live streaming)
+    // FFmpeg HLS konfiguracija - vraćamo na inicijalnu konfiguraciju koja je radila
+    // Dodajemo samo event playlist type da se playlist kreira odmah
     ffmpegProcess = spawn('ffmpeg', [
       '-y',
       '-i', directUrl,
-      // Važno: generiši timestamp-ove i izbegni negativne timestamp-ove (važno za video playback)
-      '-fflags', '+genpts', // Generiši presentation timestamp-ove
-      '-avoid_negative_ts', 'make_zero', // Izbegni negativne timestamp-ove
-      '-vsync', 'cfr', // Constant frame rate - važno za HLS
-      // Video codec postavke - važno za HLS playback
+      '-vf', 'format=yuv420p',
       '-c:v', 'libx264',
       '-preset', 'veryfast',
-      '-profile:v', 'high', // Promenjeno sa 'main' na 'high' za bolju kompatibilnost
-      '-level', '4.0', // Dodato level za bolju kompatibilnost
-      '-pix_fmt', 'yuv420p', // YUV420P je standardni format za HLS
-      '-g', '30', // GOP size - keyframe svakih 30 frame-ova (važno za HLS)
-      '-keyint_min', '30', // Minimum keyframe interval
-      '-sc_threshold', '0', // Scene change threshold - 0 znači da se ne koristi scene detection
-      '-b:v', '2M', // Video bitrate
-      '-maxrate', '2M',
-      '-bufsize', '4M',
-      // Audio codec postavke
-      '-c:a', 'aac',
-      '-b:a', '128k',
-      '-ac', '2',
-      '-ar', '44100',
-      // Map streamove
+      '-profile:v', 'main',
+      '-pix_fmt', 'yuv420p',
       '-map', '0:v:0',
       '-map', '0:a:2?',
       '-map', '0:a:0?',
-      // HLS postavke
+      '-c:a', 'aac',
+      '-ac', '2',
       '-f', 'hls',
-      '-hls_time', '6', // Segment dužina u sekundama
-      '-hls_list_size', '20', // Zadrži poslednjih 20 segmenata u playlisti
-      '-hls_flags', 'delete_segments+program_date_time+independent_segments', // Briši stare segmente, dodaj program_date_time i independent_segments
-      '-hls_segment_type', 'mpegts',
-      '-hls_segment_filename', `${HLS_DIR}/stream%03d.ts`, // Eksplicitno ime fajlova
-      '-hls_playlist_type', 'event', // Event type - playlist se kreira odmah i ažurira se dok se segmenti dodaju
-      '-start_number', '0', // Počni sa segmentom 0
+      '-hls_time', '6',
+      '-hls_list_size', '0', // 0 = zadrži sve segmente (kao u inicijalnoj konfiguraciji)
+      '-hls_playlist_type', 'event', // Event type - playlist se kreira odmah (umesto vod)
       `${HLS_DIR}/stream.m3u8`
     ], {
       stdio: ['ignore', 'pipe', 'pipe'] // Redirect stdout i stderr
