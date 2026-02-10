@@ -138,19 +138,14 @@ app.get('/start', async (req, res) => {
   const urlParam = req.query.url;
   if (!urlParam) return res.send("Missing url in params");
 
-  // Ako već postoji FFmpeg proces koji radi, ne restartuj ga
-  if (ffmpegProcess && !ffmpegProcess.killed) {
-    logger.log('FFmpeg process already running, redirecting to existing stream...');
-    return res.redirect(`/stream/stream.m3u8`);
-  }
-
   try {
-    // Zaustavi stari FFmpeg proces ako postoji (samo ako je zaista zaustavljen)
-    if (ffmpegProcess && ffmpegProcess.killed) {
+    // Uvek zaustavi stari FFmpeg proces pre pokretanja novog
+    if (ffmpegProcess) {
       logger.log('Stopping previous FFmpeg process...');
       try {
+        // Prvo pokušaj sa SIGTERM
         ffmpegProcess.kill("SIGTERM");
-        // Sačekaj da se proces zaista završi (SIGTERM je blaži od SIGKILL)
+        // Sačekaj da se proces zaista završi
         await new Promise(resolve => setTimeout(resolve, 1000));
         // Ako još uvek radi, koristi SIGKILL
         if (ffmpegProcess && !ffmpegProcess.killed) {
@@ -188,38 +183,60 @@ app.get('/start', async (req, res) => {
 
     logger.log(`Starting FFmpeg stream for: ${directUrl.substring(0, 50)}...`);
     
-    // FFmpeg HLS konfiguracija - vraćamo na inicijalnu konfiguraciju koja je radila
-    // Koristimo event type da se playlist kreira odmah (ne čeka završetak streama)
-    // Eksplicitno definišemo ime segmenata da budu stream0.ts, stream1.ts, itd.
-    // Dodajemo opcije za video codec da osiguramo da video radi
+    // FFmpeg HLS konfiguracija - optimizovano za iOS 12.5.7 (iPad Air)
+    // Koristimo baseline profile za maksimalnu kompatibilnost sa starijim iOS uređajima
+    // Event type da se playlist kreira odmah (ne čeka završetak streama)
     ffmpegProcess = spawn('ffmpeg', [
       '-y',
       '-i', directUrl,
-      '-vf', 'format=yuv420p',
+      // Video codec - baseline profile za iOS 12 kompatibilnost
       '-c:v', 'libx264',
       '-preset', 'veryfast',
-      '-profile:v', 'main',
-      '-pix_fmt', 'yuv420p',
+      '-profile:v', 'baseline', // Baseline profile za iOS 12 kompatibilnost (ne main ili high)
+      '-level', '3.1', // Level 3.1 za iOS 12 kompatibilnost
+      '-pix_fmt', 'yuv420p', // YUV420P je standardni format za iOS
+      '-vf', 'format=yuv420p', // Osiguraj YUV420P format
       '-g', '30', // GOP size - keyframe svakih 30 frame-ova (važno za HLS)
       '-keyint_min', '30', // Minimum keyframe interval
       '-sc_threshold', '0', // Scene change threshold
+      '-b:v', '2M', // Video bitrate
+      '-maxrate', '2M',
+      '-bufsize', '4M',
+      // Audio codec
+      '-c:a', 'aac',
+      '-b:a', '128k',
+      '-ac', '2',
+      '-ar', '44100',
+      // Map streamove
       '-map', '0:v:0',
       '-map', '0:a:2?',
       '-map', '0:a:0?',
-      '-c:a', 'aac',
-      '-ac', '2',
+      // HLS postavke
       '-f', 'hls',
-      '-hls_time', '6',
-      '-hls_list_size', '0', // 0 = zadrži sve segmente (kao u inicijalnoj konfiguraciji)
+      '-hls_time', '6', // Segment dužina u sekundama
+      '-hls_list_size', '0', // 0 = zadrži sve segmente
       '-hls_segment_filename', `${HLS_DIR}/stream%d.ts`, // Eksplicitno ime: stream0.ts, stream1.ts, itd.
       '-hls_playlist_type', 'event', // Event type - playlist se kreira odmah i ažurira se dok se segmenti dodaju
-      '-hls_flags', 'append_list', // Dodaj segmente u playlist dok se dodaju (ne čekaj završetak)
+      '-hls_flags', 'append_list+independent_segments', // Dodaj segmente u playlist dok se dodaju + independent segments za iOS
+      '-start_number', '0', // Počni sa segmentom 0
       `${HLS_DIR}/stream.m3u8`
     ], {
       stdio: ['ignore', 'pipe', 'pipe'] // Redirect stdout i stderr
     });
 
-    ffmpegProcess.stderr.on('data', d => logger.debug('FFmpeg:', d.toString()));
+    // Loguj FFmpeg stderr output za debugging (posebno video codec greške)
+    ffmpegProcess.stderr.on('data', d => {
+      const output = d.toString();
+      // Loguj samo važne poruke (greške, upozorenja, codec info)
+      if (output.includes('error') || output.includes('Error') || 
+          output.includes('warning') || output.includes('Warning') ||
+          output.includes('codec') || output.includes('Stream') ||
+          output.includes('Video:')) {
+        logger.warn('FFmpeg:', output.trim());
+      } else {
+        logger.debug('FFmpeg:', output.trim());
+      }
+    });
     
     ffmpegProcess.on('error', (err) => {
       logger.error('FFmpeg process error:', err);
@@ -296,10 +313,13 @@ app.get('/start', async (req, res) => {
 });
 
 // Statika za HLS fajlove - CORS headers za cross-origin pristup
+// Važno za iOS 12 - mora da ima pravilne Content-Type headers i Range support
 app.use("/stream", (req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Range');
+  res.header('Access-Control-Expose-Headers', 'Content-Length, Content-Range');
+  // Važno za iOS - dozvoli Range requests za HLS
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
@@ -308,8 +328,14 @@ app.use("/stream", (req, res, next) => {
   setHeaders: (res, path) => {
     if (path.endsWith('.m3u8')) {
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
     } else if (path.endsWith('.ts')) {
       res.setHeader('Content-Type', 'video/mp2t');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      // Važno za iOS - dozvoli Range requests
+      res.setHeader('Accept-Ranges', 'bytes');
     }
   }
 }));
