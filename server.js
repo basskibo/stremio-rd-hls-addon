@@ -187,6 +187,10 @@ app.get('/start', async (req, res) => {
     ffmpegProcess = spawn('ffmpeg', [
       '-y',
       '-i', directUrl,
+      // Važno: generiši timestamp-ove i izbegni negativne timestamp-ove (važno za video playback)
+      '-fflags', '+genpts', // Generiši presentation timestamp-ove
+      '-avoid_negative_ts', 'make_zero', // Izbegni negativne timestamp-ove
+      '-vsync', 'cfr', // Constant frame rate - važno za HLS
       // Video codec postavke - važno za HLS playback
       '-c:v', 'libx264',
       '-preset', 'veryfast',

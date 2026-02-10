@@ -41,8 +41,19 @@ const consoleFormat = winston.format.combine(
   winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
   winston.format.printf(({ timestamp, level, message, ...meta }) => {
     let msg = `${timestamp} [${level}]: ${message}`;
+    // Formatiraj meta objekte pravilno - ne prikazuj index i slovo jedno
     if (Object.keys(meta).length > 0) {
-      msg += ` ${JSON.stringify(meta)}`;
+      // Filtriraj meta objekte - ukloni numeričke ključeve (index i slovo jedno)
+      const filteredMeta = {};
+      for (const [key, value] of Object.entries(meta)) {
+        // Preskoči numeričke ključeve (to su oni razlupani index i slovo)
+        if (isNaN(Number(key))) {
+          filteredMeta[key] = value;
+        }
+      }
+      if (Object.keys(filteredMeta).length > 0) {
+        msg += ` ${JSON.stringify(filteredMeta, null, 2)}`;
+      }
     }
     return msg;
   })
@@ -86,7 +97,14 @@ const winstonLogger = winston.createLogger({
 const logger = {
   log: (message, ...args) => {
     if (args.length > 0) {
-      winstonLogger.info(message, ...args);
+      // Formatiraj argumente pravilno - ako je objekat, stringify-uj ga
+      const formattedArgs = args.map(arg => {
+        if (typeof arg === 'object' && arg !== null) {
+          return JSON.stringify(arg, null, 2);
+        }
+        return arg;
+      });
+      winstonLogger.info(message, ...formattedArgs);
     } else {
       winstonLogger.info(message);
     }
@@ -94,7 +112,13 @@ const logger = {
   
   info: (message, ...args) => {
     if (args.length > 0) {
-      winstonLogger.info(message, ...args);
+      const formattedArgs = args.map(arg => {
+        if (typeof arg === 'object' && arg !== null) {
+          return JSON.stringify(arg, null, 2);
+        }
+        return arg;
+      });
+      winstonLogger.info(message, ...formattedArgs);
     } else {
       winstonLogger.info(message);
     }
@@ -102,7 +126,13 @@ const logger = {
   
   warn: (message, ...args) => {
     if (args.length > 0) {
-      winstonLogger.warn(message, ...args);
+      const formattedArgs = args.map(arg => {
+        if (typeof arg === 'object' && arg !== null) {
+          return JSON.stringify(arg, null, 2);
+        }
+        return arg;
+      });
+      winstonLogger.warn(message, ...formattedArgs);
     } else {
       winstonLogger.warn(message);
     }
@@ -110,7 +140,13 @@ const logger = {
   
   error: (message, ...args) => {
     if (args.length > 0) {
-      winstonLogger.error(message, ...args);
+      const formattedArgs = args.map(arg => {
+        if (typeof arg === 'object' && arg !== null) {
+          return JSON.stringify(arg, null, 2);
+        }
+        return arg;
+      });
+      winstonLogger.error(message, ...formattedArgs);
     } else {
       winstonLogger.error(message);
     }
@@ -118,7 +154,13 @@ const logger = {
   
   debug: (message, ...args) => {
     if (args.length > 0) {
-      winstonLogger.debug(message, ...args);
+      const formattedArgs = args.map(arg => {
+        if (typeof arg === 'object' && arg !== null) {
+          return JSON.stringify(arg, null, 2);
+        }
+        return arg;
+      });
+      winstonLogger.debug(message, ...formattedArgs);
     } else {
       winstonLogger.debug(message);
     }
