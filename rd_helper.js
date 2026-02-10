@@ -49,7 +49,7 @@ export async function unrestrictRD(url) {
     }
   
     const data = await res.json();
-    logger.log('RD API Success - DATA:', JSON.stringify(data, null, 2));
+    logger.log('RD API Success - DATA:', data);
     
     if (!data.download) {
       logger.error('RD API response missing download field:', data);

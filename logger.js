@@ -98,9 +98,19 @@ const logger = {
   log: (message, ...args) => {
     if (args.length > 0) {
       // Formatiraj argumente pravilno - ako je objekat, stringify-uj ga
+      // Ako je već string (JSON), prosleđuj ga direktno
       const formattedArgs = args.map(arg => {
+        if (typeof arg === 'string') {
+          // Ako je već string, prosleđuj ga direktno
+          return arg;
+        }
         if (typeof arg === 'object' && arg !== null) {
-          return JSON.stringify(arg, null, 2);
+          // Stringify-uj objekat
+          try {
+            return JSON.stringify(arg, null, 2);
+          } catch (err) {
+            return String(arg);
+          }
         }
         return arg;
       });
@@ -113,8 +123,15 @@ const logger = {
   info: (message, ...args) => {
     if (args.length > 0) {
       const formattedArgs = args.map(arg => {
+        if (typeof arg === 'string') {
+          return arg;
+        }
         if (typeof arg === 'object' && arg !== null) {
-          return JSON.stringify(arg, null, 2);
+          try {
+            return JSON.stringify(arg, null, 2);
+          } catch (err) {
+            return String(arg);
+          }
         }
         return arg;
       });
@@ -127,8 +144,15 @@ const logger = {
   warn: (message, ...args) => {
     if (args.length > 0) {
       const formattedArgs = args.map(arg => {
+        if (typeof arg === 'string') {
+          return arg;
+        }
         if (typeof arg === 'object' && arg !== null) {
-          return JSON.stringify(arg, null, 2);
+          try {
+            return JSON.stringify(arg, null, 2);
+          } catch (err) {
+            return String(arg);
+          }
         }
         return arg;
       });
@@ -141,8 +165,15 @@ const logger = {
   error: (message, ...args) => {
     if (args.length > 0) {
       const formattedArgs = args.map(arg => {
+        if (typeof arg === 'string') {
+          return arg;
+        }
         if (typeof arg === 'object' && arg !== null) {
-          return JSON.stringify(arg, null, 2);
+          try {
+            return JSON.stringify(arg, null, 2);
+          } catch (err) {
+            return String(arg);
+          }
         }
         return arg;
       });
@@ -155,8 +186,15 @@ const logger = {
   debug: (message, ...args) => {
     if (args.length > 0) {
       const formattedArgs = args.map(arg => {
+        if (typeof arg === 'string') {
+          return arg;
+        }
         if (typeof arg === 'object' && arg !== null) {
-          return JSON.stringify(arg, null, 2);
+          try {
+            return JSON.stringify(arg, null, 2);
+          } catch (err) {
+            return String(arg);
+          }
         }
         return arg;
       });

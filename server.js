@@ -138,9 +138,15 @@ app.get('/start', async (req, res) => {
   const urlParam = req.query.url;
   if (!urlParam) return res.send("Missing url in params");
 
+  // Ako već postoji FFmpeg proces koji radi, ne restartuj ga
+  if (ffmpegProcess && !ffmpegProcess.killed) {
+    logger.log('FFmpeg process already running, redirecting to existing stream...');
+    return res.redirect(`/stream/stream.m3u8`);
+  }
+
   try {
-    // Zaustavi stari FFmpeg proces ako postoji
-    if (ffmpegProcess) {
+    // Zaustavi stari FFmpeg proces ako postoji (samo ako je zaista zaustavljen)
+    if (ffmpegProcess && ffmpegProcess.killed) {
       logger.log('Stopping previous FFmpeg process...');
       try {
         ffmpegProcess.kill("SIGTERM");
@@ -185,6 +191,7 @@ app.get('/start', async (req, res) => {
     // FFmpeg HLS konfiguracija - vraćamo na inicijalnu konfiguraciju koja je radila
     // Koristimo event type da se playlist kreira odmah (ne čeka završetak streama)
     // Eksplicitno definišemo ime segmenata da budu stream0.ts, stream1.ts, itd.
+    // Dodajemo opcije za video codec da osiguramo da video radi
     ffmpegProcess = spawn('ffmpeg', [
       '-y',
       '-i', directUrl,
@@ -193,6 +200,9 @@ app.get('/start', async (req, res) => {
       '-preset', 'veryfast',
       '-profile:v', 'main',
       '-pix_fmt', 'yuv420p',
+      '-g', '30', // GOP size - keyframe svakih 30 frame-ova (važno za HLS)
+      '-keyint_min', '30', // Minimum keyframe interval
+      '-sc_threshold', '0', // Scene change threshold
       '-map', '0:v:0',
       '-map', '0:a:2?',
       '-map', '0:a:0?',
