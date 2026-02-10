@@ -219,38 +219,60 @@ app.get('/start', async (req, res) => {
       ffmpegProcess = null;
     });
 
-    // Sačekaj da se FFmpeg pokrene i kreira prvi segment
-    // VOD type kreira playlist tek kada se kreira prvi segment
-    // Čekamo da se kreira prvi segment (stream0.ts) i da ima dovoljno veličine
-    let segmentReady = false;
-    for (let i = 0; i < 60; i++) { // Povećano na 30 sekundi (60 * 500ms) - dovoljno za 5 segmenata (30s)
+    // Sačekaj da se FFmpeg pokrene i kreira playlist sa prvim segmentom
+    // VOD type kreira playlist tek kada se završi prvi segment
+    // Čekamo da se kreira playlist i da sadrži barem jedan segment
+    let playlistReady = false;
+    for (let i = 0; i < 60; i++) { // Povećano na 30 sekundi (60 * 500ms)
       await new Promise(resolve => setTimeout(resolve, 500));
       const playlistPath = path.join(HLS_DIR, 'stream.m3u8');
-      const firstSegmentPath = path.join(HLS_DIR, 'stream0.ts'); // stream0.ts, ne stream000.ts
       
-      // Proveri da li postoji prvi segment i da li ima dovoljno veličine (min 100KB)
-      if (fs.existsSync(firstSegmentPath)) {
-        const segmentStats = fs.statSync(firstSegmentPath);
-        if (segmentStats.size > 100000) { // Min 100KB za prvi segment
-          // Proveri da li postoji playlist i da li sadrži prvi segment
-          if (fs.existsSync(playlistPath)) {
-            const playlistStats = fs.statSync(playlistPath);
-            if (playlistStats.size > 0) {
-              // Pročitaj playlist i proveri da li sadrži stream0.ts
-              const playlistContent = fs.readFileSync(playlistPath, 'utf8');
-              if (playlistContent.includes('stream0.ts')) {
-                segmentReady = true;
-                logger.log(`HLS playlist and first segment ready (${segmentStats.size} bytes)`);
-                break;
+      // Proveri da li postoji playlist
+      if (fs.existsSync(playlistPath)) {
+        const playlistStats = fs.statSync(playlistPath);
+        if (playlistStats.size > 0) {
+          try {
+            // Pročitaj playlist i proveri da li sadrži bilo koji segment
+            const playlistContent = fs.readFileSync(playlistPath, 'utf8');
+            
+            // Proveri da li playlist sadrži bilo koji .ts segment
+            if (playlistContent.includes('.ts')) {
+              // Proveri da li postoji prvi segment koji je naveden u playlist-u
+              // Pronađi prvi .ts fajl u playlist-u
+              const segmentMatch = playlistContent.match(/stream\d+\.ts/);
+              if (segmentMatch) {
+                const firstSegmentName = segmentMatch[0];
+                const firstSegmentPath = path.join(HLS_DIR, firstSegmentName);
+                
+                if (fs.existsSync(firstSegmentPath)) {
+                  const segmentStats = fs.statSync(firstSegmentPath);
+                  if (segmentStats.size > 50000) { // Min 50KB za prvi segment
+                    playlistReady = true;
+                    logger.log(`HLS playlist and first segment ready (${firstSegmentName}, ${segmentStats.size} bytes)`);
+                    break;
+                  }
+                }
+              } else {
+                // Ako nema match-a, možda je playlist još uvek prazan
+                logger.debug(`Playlist exists but no segment found yet (size: ${playlistStats.size})`);
               }
             }
+          } catch (err) {
+            logger.warn(`Error reading playlist: ${err.message}`);
           }
         }
       }
     }
     
-    if (!segmentReady) {
-      logger.warn('HLS first segment not ready after 30 seconds - redirecting anyway');
+    if (!playlistReady) {
+      logger.warn('HLS playlist not ready after 30 seconds - redirecting anyway');
+      // Proveri da li postoji playlist makar
+      const playlistPath = path.join(HLS_DIR, 'stream.m3u8');
+      if (fs.existsSync(playlistPath)) {
+        logger.log('Playlist exists, redirecting anyway');
+      } else {
+        logger.warn('Playlist does not exist!');
+      }
     }
     
     // Kada se pokrene, redirectuj na HLS playlist
