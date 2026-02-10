@@ -184,7 +184,7 @@ app.get('/start', async (req, res) => {
     
     // FFmpeg HLS konfiguracija - vraćamo na inicijalnu konfiguraciju koja je radila
     // Koristimo vod type ali sa hls_list_size 0 da zadrži sve segmente
-    // Čekaćemo da se kreira prvi segment pre redirecta
+    // Eksplicitno definišemo ime segmenata da budu stream0.ts, stream1.ts, itd.
     ffmpegProcess = spawn('ffmpeg', [
       '-y',
       '-i', directUrl,
@@ -201,6 +201,7 @@ app.get('/start', async (req, res) => {
       '-f', 'hls',
       '-hls_time', '6',
       '-hls_list_size', '0', // 0 = zadrži sve segmente (kao u inicijalnoj konfiguraciji)
+      '-hls_segment_filename', `${HLS_DIR}/stream%d.ts`, // Eksplicitno ime: stream0.ts, stream1.ts, itd.
       '-hls_playlist_type', 'vod', // VOD type - kao u inicijalnoj konfiguraciji
       `${HLS_DIR}/stream.m3u8`
     ], {
@@ -220,12 +221,12 @@ app.get('/start', async (req, res) => {
 
     // Sačekaj da se FFmpeg pokrene i kreira prvi segment
     // VOD type kreira playlist tek kada se kreira prvi segment
-    // Čekamo da se kreira prvi segment (stream000.ts) i da ima dovoljno veličine
+    // Čekamo da se kreira prvi segment (stream0.ts) i da ima dovoljno veličine
     let segmentReady = false;
     for (let i = 0; i < 60; i++) { // Povećano na 30 sekundi (60 * 500ms) - dovoljno za 5 segmenata (30s)
       await new Promise(resolve => setTimeout(resolve, 500));
       const playlistPath = path.join(HLS_DIR, 'stream.m3u8');
-      const firstSegmentPath = path.join(HLS_DIR, 'stream000.ts');
+      const firstSegmentPath = path.join(HLS_DIR, 'stream0.ts'); // stream0.ts, ne stream000.ts
       
       // Proveri da li postoji prvi segment i da li ima dovoljno veličine (min 100KB)
       if (fs.existsSync(firstSegmentPath)) {
@@ -235,9 +236,9 @@ app.get('/start', async (req, res) => {
           if (fs.existsSync(playlistPath)) {
             const playlistStats = fs.statSync(playlistPath);
             if (playlistStats.size > 0) {
-              // Pročitaj playlist i proveri da li sadrži stream000.ts
+              // Pročitaj playlist i proveri da li sadrži stream0.ts
               const playlistContent = fs.readFileSync(playlistPath, 'utf8');
-              if (playlistContent.includes('stream000.ts')) {
+              if (playlistContent.includes('stream0.ts')) {
                 segmentReady = true;
                 logger.log(`HLS playlist and first segment ready (${segmentStats.size} bytes)`);
                 break;
