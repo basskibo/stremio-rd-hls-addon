@@ -183,7 +183,7 @@ app.get('/start', async (req, res) => {
     logger.log(`Starting FFmpeg stream for: ${directUrl.substring(0, 50)}...`);
     
     // FFmpeg HLS konfiguracija - vraćamo na inicijalnu konfiguraciju koja je radila
-    // Koristimo vod type ali sa hls_list_size 0 da zadrži sve segmente
+    // Koristimo event type da se playlist kreira odmah (ne čeka završetak streama)
     // Eksplicitno definišemo ime segmenata da budu stream0.ts, stream1.ts, itd.
     ffmpegProcess = spawn('ffmpeg', [
       '-y',
@@ -202,7 +202,8 @@ app.get('/start', async (req, res) => {
       '-hls_time', '6',
       '-hls_list_size', '0', // 0 = zadrži sve segmente (kao u inicijalnoj konfiguraciji)
       '-hls_segment_filename', `${HLS_DIR}/stream%d.ts`, // Eksplicitno ime: stream0.ts, stream1.ts, itd.
-      '-hls_playlist_type', 'vod', // VOD type - kao u inicijalnoj konfiguraciji
+      '-hls_playlist_type', 'event', // Event type - playlist se kreira odmah i ažurira se dok se segmenti dodaju
+      '-hls_flags', 'append_list', // Dodaj segmente u playlist dok se dodaju (ne čekaj završetak)
       `${HLS_DIR}/stream.m3u8`
     ], {
       stdio: ['ignore', 'pipe', 'pipe'] // Redirect stdout i stderr
