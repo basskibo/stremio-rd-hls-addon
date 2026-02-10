@@ -183,7 +183,8 @@ app.get('/start', async (req, res) => {
     logger.log(`Starting FFmpeg stream for: ${directUrl.substring(0, 50)}...`);
     
     // FFmpeg HLS konfiguracija - vraćamo na inicijalnu konfiguraciju koja je radila
-    // Dodajemo samo event playlist type da se playlist kreira odmah
+    // Koristimo vod type ali sa hls_list_size 0 da zadrži sve segmente
+    // Čekaćemo da se kreira prvi segment pre redirecta
     ffmpegProcess = spawn('ffmpeg', [
       '-y',
       '-i', directUrl,
@@ -200,7 +201,7 @@ app.get('/start', async (req, res) => {
       '-f', 'hls',
       '-hls_time', '6',
       '-hls_list_size', '0', // 0 = zadrži sve segmente (kao u inicijalnoj konfiguraciji)
-      '-hls_playlist_type', 'event', // Event type - playlist se kreira odmah (umesto vod)
+      '-hls_playlist_type', 'vod', // VOD type - kao u inicijalnoj konfiguraciji
       `${HLS_DIR}/stream.m3u8`
     ], {
       stdio: ['ignore', 'pipe', 'pipe'] // Redirect stdout i stderr
@@ -217,36 +218,38 @@ app.get('/start', async (req, res) => {
       ffmpegProcess = null;
     });
 
-    // Sačekaj da se FFmpeg pokrene i kreira playlist i prvi segment
-    // Event playlist type kreira playlist odmah, ali treba da sačekamo prvi segment
-    let playlistReady = false;
+    // Sačekaj da se FFmpeg pokrene i kreira prvi segment
+    // VOD type kreira playlist tek kada se kreira prvi segment
+    // Čekamo da se kreira prvi segment (stream000.ts) i da ima dovoljno veličine
     let segmentReady = false;
-    for (let i = 0; i < 30; i++) { // Povećano na 15 sekundi (30 * 500ms)
+    for (let i = 0; i < 60; i++) { // Povećano na 30 sekundi (60 * 500ms) - dovoljno za 5 segmenata (30s)
       await new Promise(resolve => setTimeout(resolve, 500));
       const playlistPath = path.join(HLS_DIR, 'stream.m3u8');
       const firstSegmentPath = path.join(HLS_DIR, 'stream000.ts');
       
-      if (fs.existsSync(playlistPath)) {
-        const stats = fs.statSync(playlistPath);
-        if (stats.size > 0) {
-          playlistReady = true;
-          // Proveri da li postoji prvi segment
-          if (fs.existsSync(firstSegmentPath)) {
-            const segmentStats = fs.statSync(firstSegmentPath);
-            if (segmentStats.size > 0) {
-              segmentReady = true;
-              logger.log('HLS playlist and first segment created and ready');
-              break;
+      // Proveri da li postoji prvi segment i da li ima dovoljno veličine (min 100KB)
+      if (fs.existsSync(firstSegmentPath)) {
+        const segmentStats = fs.statSync(firstSegmentPath);
+        if (segmentStats.size > 100000) { // Min 100KB za prvi segment
+          // Proveri da li postoji playlist i da li sadrži prvi segment
+          if (fs.existsSync(playlistPath)) {
+            const playlistStats = fs.statSync(playlistPath);
+            if (playlistStats.size > 0) {
+              // Pročitaj playlist i proveri da li sadrži stream000.ts
+              const playlistContent = fs.readFileSync(playlistPath, 'utf8');
+              if (playlistContent.includes('stream000.ts')) {
+                segmentReady = true;
+                logger.log(`HLS playlist and first segment ready (${segmentStats.size} bytes)`);
+                break;
+              }
             }
           }
         }
       }
     }
     
-    if (!playlistReady) {
-      logger.warn('HLS playlist not ready after 15 seconds');
-    } else if (!segmentReady) {
-      logger.warn('HLS playlist ready but first segment not ready yet');
+    if (!segmentReady) {
+      logger.warn('HLS first segment not ready after 30 seconds - redirecting anyway');
     }
     
     // Kada se pokrene, redirectuj na HLS playlist
