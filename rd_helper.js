@@ -1,4 +1,3 @@
-import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import logger from './logger.js';
@@ -6,12 +5,18 @@ import logger from './logger.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const TMDB_API_KEY = "f593842b5c3424753cb2fec85a21b46f"; // stavi ovde svoj TMDb API key
-const RD_API_TOKEN = "I2TRCIH5PJN7WU4427ESNCB6NPAK7FY4633MQ5LR3CZAX75T3KBQ";
-const RD_API_BASE = "https://api.real-debrid.com/rest/1.0";
+const RD_API_TOKEN = (process.env.RD_API_TOKEN || '').trim();
+const RD_API_BASE = 'https://api.real-debrid.com/rest/1.0';
+/** Ako je 1/true/yes, ignoriše RD čak i kada je RD_API_TOKEN postavljen (samo WebTorrent + unrestrict za http linkove). */
+const RD_DISABLE = /^(1|true|yes)$/i.test(String(process.env.RD_DISABLE || '').trim());
+const RD_TRY_MAGNET = Boolean(RD_API_TOKEN) && !RD_DISABLE;
 
 export async function unrestrictRD(url) {
   try {
+    if (!RD_API_TOKEN) {
+      logger.debug('RD_API_TOKEN nije postavljen — preskačem unrestrict.');
+      return null;
+    }
     logger.log('UNRESTRICT RD - URL:', url);
     
     // Proveri da li je validan URL
@@ -64,136 +69,111 @@ export async function unrestrictRD(url) {
 }
   
 
-  
 /**
- * Dobija RD link sa Stremio ID
- * @param {string} stremioId - npr. "tt0388629:9:47"
- * @returns {Promise<string|null>} direktan RD HLS link ili null
+ * Jedan kandidat iz liste torrenta (Torrentio) za Stremio id.
+ * @param {string} stremioId npr. tt0388629:10:9
+ * @param {string} type movie | series
+ * @param {number} torIdx indeks u već sortiranoj listi (0 = najbolji po trenutnoj heuristici)
+ * @returns {Promise<null|{ kind:'http'|'magnet', url?:string, magnet?:string, fileIdx:number, title:string, displayTitle:string, torIdx:number, total:number }>}
  */
- async function unrestrictRDFromId(stremioId, type = 'series') {
-    try {
-      let imdbId, season, episode;
-      const parts = stremioId.split(':');
-  
-      imdbId = parts[0];
-      if (parts.length === 3) {
-        season = parts[1];
-        episode = parts[2];
-      }
-  
-      // 1️⃣ find TMDb ID
-      const findResp = await fetch(
-        `https://api.themoviedb.org/3/find/${imdbId}?api_key=${TMDB_API_KEY}&external_source=imdb_id`
-      );
-      const findData = await findResp.json();
-  
-      let tmdbId;
-      if (findData.tv_results && findData.tv_results.length > 0) {
-        tmdbId = findData.tv_results[0].id;
-      } else if (findData.movie_results && findData.movie_results.length > 0) {
-        tmdbId = findData.movie_results[0].id;
-      } else {
-        logger.warn('TMDb ID not found for', imdbId);
-        return null;
-      }
-  
-      // 2️⃣ Ako je epizoda serije, dohvati naziv epizode
-      let query = '';
-      if (season && episode) {
-        const epResp = await fetch(
-          `https://api.themoviedb.org/3/tv/${tmdbId}/season/${season}/episode/${episode}?api_key=${TMDB_API_KEY}`
-        );
-        const epData = await epResp.json();
-        logger.log('epData', epData)
-        
-        // Sačuvaj epData u fajl
-        const epDataFile = path.join(__dirname, 'epData.json');
-        fs.writeFileSync(epDataFile, JSON.stringify(epData, null, 2), 'utf8');
-        logger.log(`epData saved to ${epDataFile}`);
+async function resolveStremioSource(stremioId, type = 'series', torIdx = 0) {
+  logger.log(`Torrentio upit: ${stremioId} (${type}), torIdx=${torIdx}`);
 
-        if (!epData.name) {
-          logger.warn('Episode not found:', stremioId);
-          return null;
-        }
-        query = `${findData.tv_results[0].name} S${season}E${episode} ${epData.name}`;
-      } else {
-        // Film
-        query = findData.movie_results[0].title;
-      }
-  
-      logger.debug('QUERY', query)
-      logger.debug('findData', findData)
-      logger.debug('tmdbId', tmdbId)
-      logger.debug('imdbId', imdbId)
-      logger.debug('season', season)
-      logger.debug('episode', episode)
-      logger.debug('parts', parts)
-      logger.debug('stremioId', stremioId)
-      
-      // 3️⃣ Koristi Torrentio addon API da dobiješ stream linkove, zatim unrestrictuj kroz RD
-      // Ovo je način kako rade svi RD addoni - koriste Torrentio da dobiju linkove, pa ih unrestrictuju
-      logger.log(`Getting stream links from Torrentio for Stremio ID: ${stremioId}`);
-      
-      const torrentioLinks = await getStreamLinksFromTorrentio(stremioId, type || 'series');
-      
-      if (!torrentioLinks || torrentioLinks.length === 0) {
-        logger.warn('No stream links found from Torrentio');
-        return null;
-      }
-      
-      // Uzmi prvi stream (obično najbolji kvalitet)
-      const firstStream = torrentioLinks[0];
-      if (!firstStream || !firstStream.infoHash) {
-        logger.error('Invalid stream data from Torrentio:', firstStream);
-        return null;
-      }
-      
-      const infoHash = firstStream.infoHash;
-      const streamName = String(firstStream.name || 'Unknown').replace(/\n/g, ' ').trim();
-      logger.log(`Processing stream: ${streamName} (infoHash: ${infoHash.substring(0, 16)}...)`);
-      
-      // 1. Prvo proveri RD instant availability sa infoHash-om
-      logger.log('Checking RD instant availability...');
-      const instantFile = await checkRDInstantAvailability(infoHash);
-      
-      if (instantFile && instantFile.rd && instantFile.rd.length > 0) {
-        // RD već ima cached torrent - uzmi direktan link
-        logger.log('Found instant availability on RD!');
-        // Instant availability vraća info o fajlovima, treba da dodamo torrent i uzmemo link
-        // Za sada koristimo magnet link pristup
-      }
-      
-      // 2. Ako nema instant availability, dodaj magnet link na RD
-      if (!firstStream.magnetLink) {
-        logger.error('No magnet link available for stream');
-        return null;
-      }
-      
-      const magnetPreview = firstStream.magnetLink.substring(0, 60);
-      logger.log(`Adding magnet link to RD: ${magnetPreview}...`);
-      const torrentId = await addTorrentToRD(firstStream.magnetLink);
-      
-      if (!torrentId) {
-        logger.error('Failed to add torrent to RD');
-        return null;
-      }
-      
-      // 3. Čekaj da se torrent download završi i uzmi direktan link
-      logger.log('Waiting for torrent to be ready on RD...');
-      const rdDirectLink = await getTorrentDownloadLink(torrentId);
-      
-      if (!rdDirectLink) {
-        logger.error('Failed to get direct download link from RD');
-        return null;
-      }
-      
-      logger.log('Successfully got direct link from RD');
-      return rdDirectLink;
-    } catch (err) {
-      logger.error('Error in unrestrictRDFromId:', err);
-      return null;
-    }
+  const torrentioLinks = await getStreamLinksFromTorrentio(stremioId, type || 'series');
+  if (!torrentioLinks || torrentioLinks.length === 0) {
+    logger.warn('Torrentio: nema streamova');
+    return null;
   }
+
+  const idx = Math.max(0, Math.min(Number(torIdx) || 0, torrentioLinks.length - 1));
+  const stream = torrentioLinks[idx];
+  const displayTitle = String(stream.title || stream.filename || 'Torrent')
+    .split('\n')[0]
+    .replace(/\n/g, ' ')
+    .trim()
+    .slice(0, 120);
+
+  if (stream.url && /^https?:\/\//i.test(stream.url)) {
+    logger.log(`Torrentio [${idx + 1}/${torrentioLinks.length}] HTTP: ${displayTitle.slice(0, 72)}…`);
+    return {
+      kind: 'http',
+      url: stream.url,
+      fileIdx: Number.isInteger(stream.fileIdx) ? stream.fileIdx : 0,
+      title: stream.title || displayTitle,
+      displayTitle,
+      torIdx: idx,
+      total: torrentioLinks.length,
+    };
+  }
+
+  if (!stream.magnetLink) {
+    logger.error(`Torrentio [${idx + 1}]: nema magnet linka`);
+    return null;
+  }
+
+  if (RD_TRY_MAGNET) {
+    const magnetPreview = stream.magnetLink.substring(0, 72);
+    logger.log(`RD: pokušaj magneta [${idx + 1}/${torrentioLinks.length}]: ${magnetPreview}…`);
+    try {
+      const torrentId = await addTorrentToRD(stream.magnetLink);
+      if (torrentId) {
+        const rdDirectLink = await getTorrentDownloadLink(torrentId);
+        if (rdDirectLink) {
+          logger.log('RD: direktan HTTP link spreman (obično brže od lokalnog torrenta).');
+          return {
+            kind: 'http',
+            url: rdDirectLink,
+            fileIdx: 0,
+            title: stream.title || displayTitle,
+            displayTitle,
+            torIdx: idx,
+            total: torrentioLinks.length,
+          };
+        }
+        logger.warn(
+          'RD: nema spremnog linka (timeout, još uvek skida ili greška) — prelazim na WebTorrent.'
+        );
+      } else {
+        logger.warn('RD: addMagnet nije uspeo — prelazim na WebTorrent.');
+      }
+    } catch (err) {
+      logger.warn('RD greška — prelazim na WebTorrent:', err.message || String(err));
+    }
+  } else if (RD_API_TOKEN && RD_DISABLE) {
+    logger.log('RD_DISABLE: preskačem Real-Debrid za magnet — WebTorrent.');
+  }
+
+  const fileIdx = Number.isInteger(stream.fileIdx) ? stream.fileIdx : 0;
+  logger.log(
+    `WebTorrent [${idx + 1}/${torrentioLinks.length}] fileIdx=${fileIdx}: ${displayTitle.slice(0, 72)}…`
+  );
+  return {
+    kind: 'magnet',
+    magnet: stream.magnetLink,
+    fileIdx,
+    title: stream.title || displayTitle,
+    displayTitle,
+    torIdx: idx,
+    total: torrentioLinks.length,
+  };
+}
+
+/**
+ * @param {string} stremioId npr. tt0388629:10:9
+ * @param {string} type movie | series
+ * @returns {Promise<string|{magnet:string,fileIdx:number}|null>}
+ */
+async function unrestrictRDFromId(stremioId, type = 'series') {
+  try {
+    const r = await resolveStremioSource(stremioId, type, 0);
+    if (!r) return null;
+    if (r.kind === 'http') return r.url;
+    return { magnet: r.magnet, fileIdx: r.fileIdx };
+  } catch (err) {
+    logger.error('Error in unrestrictRDFromId:', err);
+    return null;
+  }
+}
   
 
 /**
@@ -203,6 +183,7 @@ export async function unrestrictRD(url) {
  */
 async function addTorrentToRD(magnetOrUrl) {
   try {
+    if (!RD_API_TOKEN) return null;
     logger.log('Adding torrent to RD:', magnetOrUrl);
     
     const res = await fetch(`${RD_API_BASE}/torrents/addMagnet`, {
@@ -237,6 +218,7 @@ async function addTorrentToRD(magnetOrUrl) {
  */
 async function getTorrentDownloadLink(torrentId, maxRetries = 10, delayMs = 2000) {
   try {
+    if (!RD_API_TOKEN) return null;
     for (let i = 0; i < maxRetries; i++) {
       const res = await fetch(`${RD_API_BASE}/torrents/info/${torrentId}`, {
         headers: {
@@ -347,6 +329,7 @@ async function getTorrentDownloadLink(torrentId, maxRetries = 10, delayMs = 2000
  */
 async function checkRDInstantAvailability(hash) {
   try {
+    if (!RD_API_TOKEN) return null;
     logger.log('Checking RD instant availability for hash:', hash);
     
     const res = await fetch(`${RD_API_BASE}/torrents/instantAvailability/${hash}`, {
@@ -387,6 +370,7 @@ async function checkRDInstantAvailability(hash) {
  */
 async function searchRDTorrents(query) {
   try {
+    if (!RD_API_TOKEN) return null;
     logger.log(`Searching existing RD torrents for: ${query}`);
     
     const res = await fetch(`${RD_API_BASE}/torrents`, {
@@ -592,6 +576,44 @@ async function searchTorrent(query, torrentHash = null) {
 }
 
 /**
+ * Torrentio u `title` ubacuje liniju kao u drugim addonima: "👤 1470 💾 1.2 GB ⚙️ NyaaSi".
+ * Taj broj je iz indexer-a (najčešće seeders / peer count) — veći = bolji swarm.
+ */
+function parseTorrentioPeerScore(title) {
+  if (!title) return 0;
+  const m = String(title).match(/👤\s*([\d][\d\s.,]*)/u);
+  if (!m) return 0;
+  const raw = m[1].replace(/[\s,]/g, '');
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Torrentio u title ubaci npr. "💾 246.3 MB" ili "💾 1.36 GB".
+ * @returns {number|null} veličina u bajtovima ili null ako nema / ne parsira
+ */
+function parseTorrentioSizeBytes(title) {
+  if (!title) return null;
+  const m = String(title).match(/💾\s*([\d]+(?:[.,]\d+)?)\s*(TiB|GiB|MiB|KiB|TB|GB|MB|KB)/iu);
+  if (!m) return null;
+  const num = parseFloat(m[1].replace(',', '.'));
+  if (!Number.isFinite(num) || num < 0) return null;
+  const u = m[2].toLowerCase();
+  const mult =
+    u === 'kb' || u === 'kib'
+      ? 1024
+      : u === 'mb' || u === 'mib'
+        ? 1024 ** 2
+        : u === 'gb' || u === 'gib'
+          ? 1024 ** 3
+          : u === 'tb' || u === 'tib'
+            ? 1024 ** 4
+            : 0;
+  if (!mult) return null;
+  return Math.round(num * mult);
+}
+
+/**
  * Dobija stream linkove iz Torrentio addon API-ja
  * @param {string} stremioId - Stremio ID (npr. "tt9335498:5:6")
  * @param {string} type - Tip sadržaja ("movie" ili "series")
@@ -635,41 +657,89 @@ async function getStreamLinksFromTorrentio(stremioId, type) {
       logger.debug(`First stream structure: ${JSON.stringify(Object.keys(data.streams[0]), null, 2)}`);
     }
     
-    // Torrentio vraća streams sa infoHash i sources (tracker URLs), ne direktnim URL-ovima
-    // Treba da kreiramo magnet link ili koristimo infoHash za RD instant availability
-    const streamLinks = data.streams.map(s => {
-      const infoHash = s.infoHash;
-      const sources = s.sources || [];
-      const fileIdx = s.fileIdx;
-      const filename = s.behaviorHints?.filename || s.title || 'Unknown';
-      
-      // Kreiraj magnet link iz infoHash i sources
-      let magnetLink = null;
-      if (infoHash) {
-        const trackers = sources.filter(src => src.startsWith('http://') || src.startsWith('https://') || src.startsWith('udp://'));
-        const trackerParams = trackers.map(t => `tr=${encodeURIComponent(t)}`).join('&');
-        magnetLink = `magnet:?xt=urn:btih:${infoHash}${trackerParams ? '&' + trackerParams : ''}`;
-      }
-      
-      return {
-        name: s.name || 'Unknown',
-        title: s.title || filename,
-        infoHash: infoHash,
-        fileIdx: fileIdx,
-        filename: filename,
-        magnetLink: magnetLink,
-        sources: sources
-      };
-    }).filter(s => s.infoHash); // Filtriraj samo one sa infoHash-om
-    
-    logger.log(`Found ${streamLinks.length} valid streams from Torrentio (with infoHash)`);
-    
+    const streamLinks = data.streams
+      .map((s) => {
+        const infoHash = s.infoHash;
+        const sources = s.sources || [];
+        const fileIdx = s.fileIdx;
+        const filename = s.behaviorHints?.filename || s.title || 'Unknown';
+        const title = s.title || filename;
+        const url =
+          s.url && /^https?:\/\//i.test(String(s.url)) ? String(s.url).trim() : null;
+
+        let magnetLink = null;
+        if (infoHash) {
+          const trackers = sources
+            .map((src) => (String(src).startsWith('tracker:') ? String(src).slice('tracker:'.length) : src))
+            .filter(
+              (t) =>
+                t.startsWith('http://') ||
+                t.startsWith('https://') ||
+                t.startsWith('udp://')
+            );
+          const trackerParams = trackers.map((t) => `tr=${encodeURIComponent(t)}`).join('&');
+          magnetLink = `magnet:?xt=urn:btih:${infoHash}${trackerParams ? '&' + trackerParams : ''}`;
+        }
+
+        return {
+          name: s.name || 'Unknown',
+          title,
+          infoHash,
+          fileIdx,
+          filename,
+          magnetLink,
+          sources,
+          url,
+          peerScore: parseTorrentioPeerScore(title),
+          sizeBytes: parseTorrentioSizeBytes(title),
+        };
+      })
+      .filter((s) => s.infoHash || s.url);
+
+    streamLinks.sort((a, b) => {
+      if (b.peerScore !== a.peerScore) return b.peerScore - a.peerScore;
+      const sa = a.sizeBytes ?? Number.MAX_SAFE_INTEGER;
+      const sb = b.sizeBytes ?? Number.MAX_SAFE_INTEGER;
+      if (sa !== sb) return sa - sb;
+      return 0;
+    });
+
+    logger.log(`Torrentio: ${streamLinks.length} streamova (magnet ili direktan URL)`);
+
     if (streamLinks.length === 0) {
-      logger.error('No valid streams with infoHash found in Torrentio response');
+      logger.error('Torrentio: nema upotrebljivih streamova');
       return null;
     }
-    
-    return streamLinks;
+
+    /** 0 = isključeno; podrazumevano 1 GB — samo ako Torrentio u title ima 💾 liniju. */
+    const maxGb = parseFloat(process.env.TORRENT_MAX_SIZE_GB ?? '1');
+    const maxBytes =
+      Number.isFinite(maxGb) && maxGb > 0 ? Math.floor(maxGb * 1024 * 1024 * 1024) : null;
+
+    let result = streamLinks;
+    if (maxBytes != null) {
+      const small = streamLinks.filter((s) => s.sizeBytes != null && s.sizeBytes <= maxBytes);
+      if (small.length > 0) {
+        result = small;
+        logger.log(
+          `Torrentio: biram među ${small.length} kandidata sa poznatom veličinom ≤ ${maxGb} GB (jak swarm + manji fajl).`
+        );
+      } else {
+        logger.warn(
+          `Torrentio: nema streamova sa 💾 ≤ ${maxGb} GB (batch često nema veličinu pojedinačnog fajla u naslovu) — fallback na najjači swarm.`
+        );
+      }
+    }
+
+    const best = result[0];
+    const head = String(best.title).split('\n')[0].slice(0, 120);
+    const szLog =
+      best.sizeBytes != null
+        ? `${(best.sizeBytes / (1024 * 1024)).toFixed(1)} MiB`
+        : 'veličina nepoznata u 💾';
+    logger.log(`Torrentio: izabran 👤 ${best.peerScore}, 💾 ${szLog}: ${head}`);
+
+    return result;
     
   } catch (err) {
     logger.error('Error getting stream links from Torrentio:', err.message);
@@ -677,12 +747,13 @@ async function getStreamLinksFromTorrentio(stremioId, type) {
   }
 }
 
-export { 
-  unrestrictRDFromId, 
-  addTorrentToRD, 
-  getTorrentDownloadLink, 
+export {
+  unrestrictRDFromId,
+  resolveStremioSource,
+  addTorrentToRD,
+  getTorrentDownloadLink,
   searchTorrent,
   searchRDTorrents,
   checkRDInstantAvailability,
-  getStreamLinksFromTorrentio
+  getStreamLinksFromTorrentio,
 };

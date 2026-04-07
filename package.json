@@ -5,12 +5,23 @@
     "type": "module",
     "scripts": {
         "start": "node server.js",
-        "start-addon": "node stremio-addon.js"
+        "start-addon": "npm run start",
+        "start:pipe": "npm run start",
+        "start:wt-http": "env WEBTORRENT_FFMPEG_HTTP=1 node server.js",
+        "start:fmp4": "env HLS_FMP4=1 node server.js",
+        "start:wt-fmp4": "env WEBTORRENT_FFMPEG_HTTP=1 HLS_FMP4=1 node server.js",
+        "start:tablet": "env WEBTORRENT_FFMPEG_HTTP=1 HLS_FMP4=1 HLS_SEGMENT_SEC=2 node server.js",
+        "start:main": "env HLS_X264_PROFILE=main HLS_X264_TUNE=none node server.js",
+        "start:tablet-main": "env WEBTORRENT_FFMPEG_HTTP=1 HLS_FMP4=1 HLS_SEGMENT_SEC=2 HLS_X264_PROFILE=main HLS_X264_TUNE=none node server.js",
+        "start:clear": "env CLEAR_HLS_ON_BOOT=1 node server.js",
+        "start:mux-ffmpeg-default": "env FFMPEG_MAX_INTERLEAVE_DELTA_US=default node server.js",
+        "start:subs-browser": "env HLS_SIMPLE_SUBS_VTT=1 node server.js"
     },
     "dependencies": {
         "express": "^4.18.2",
         "http-proxy-middleware": "^3.0.5",
         "stremio-addon-sdk": "^1.6.10",
+        "webtorrent": "^2.8.5",
         "winston": "^3.19.0",
         "winston-daily-rotate-file": "^5.0.0"
     },
