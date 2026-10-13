@@ -22,7 +22,7 @@ pusti ngrok i podesi `PUBLIC_URL` — sam video i dalje ide preko lokalne mreže
 
 - **Serije:** sezone kao tabovi, duge serije (One Piece…) u blokovima po 50 epizoda, polje „Epizoda #”
   za skok, sličice epizoda, „poslednje gledano” i „Nastavi gledanje” na početnoj.
-- **Izvori:** samo fajlovi do `MAX_SIZE_GB` (podrazumevano 1 GB); ⚡ (već na RD-u) i izdanja koja
+- **Izvori:** samo fajlovi do `MAX_SIZE_GB` (podrazumevano 1,5 GB); ⚡ (već na RD-u) i izdanja koja
   verovatno imaju engleski titl idu prva.
 - **Zvuk:** prvi `jpn`; u plejeru (dugme *Titl*) može da se izabere drugi.
 - **Titlovi:** server izvlači sve ugrađene tekstualne titlove i čisti ih (karaoke slovo-po-slovo,

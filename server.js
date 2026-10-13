@@ -30,7 +30,7 @@ const TORRENTIO = trimSlash(process.env.TORRENTIO_URL) || 'https://torrentio.str
 const TORRENTIO_OPTS =
   process.env.TORRENTIO_OPTS ||
   'qualityfilter=brremux,hdrall,dolbyvision,dolbyvisionwithhdr,threed,4k,scr,cam,unknown';
-const MAX_SIZE_GB = Number(process.env.MAX_SIZE_GB) || 1;
+const MAX_SIZE_GB = Number(process.env.MAX_SIZE_GB) || 1.5;
 const AUDIO_LANGS = langList(process.env.AUDIO_LANG || 'jpn,ja,jp');
 const SUB_LANGS = langList(process.env.SUB_LANG || 'eng,en');
 const MAX_HEIGHT = Number(process.env.MAX_HEIGHT) || 1080;
