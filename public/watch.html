@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="sr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>Gledaj</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/player.css">
+</head>
+<body>
+<div id="stage" class="stage show-ui">
+  <video id="v" playsinline webkit-playsinline preload="auto"></video>
+  <div id="subs" class="subs"></div>
+  <div id="wait" class="wait"><span class="spinner"></span><span id="waitText">Pripremam…</span></div>
+  <button id="bigPlay" class="big-play" hidden>▶</button>
+  <div id="resume" class="resume" hidden></div>
+
+  <div class="ui-top">
+    <a id="backBtn" class="ui-btn" href="/">←</a>
+    <div id="title" class="ui-title"></div>
+    <button id="nextBtn" class="ui-btn wide" hidden>Sledeća ›</button>
+  </div>
+
+  <div class="ui-bottom">
+    <div id="bar" class="bar">
+      <div id="barEnc" class="bar-enc"></div>
+      <div id="barPlayed" class="bar-played"></div>
+      <div id="barKnob" class="bar-knob"></div>
+      <div id="barTip" class="bar-tip" hidden></div>
+    </div>
+    <div class="ui-row">
+      <button id="playBtn" class="ui-btn">▶</button>
+      <button id="backBtn10" class="ui-btn">−10</button>
+      <button id="fwdBtn30" class="ui-btn">+30</button>
+      <div id="time" class="ui-time">0:00 / 0:00</div>
+      <div class="spacer"></div>
+      <button id="ccBtn" class="ui-btn wide">Titl</button>
+      <button id="fsBtn" class="ui-btn">⤢</button>
+    </div>
+  </div>
+
+  <div id="panel" class="panel" hidden>
+    <div class="panel-head"><b>Titl i zvuk</b><button id="panelClose" class="ui-btn">✕</button></div>
+    <div class="panel-sec">
+      <div class="panel-label">Titl</div>
+      <div id="subList"></div>
+    </div>
+    <div class="panel-sec">
+      <div class="panel-label">Sinhronizacija titla <span id="offsetVal" class="muted">0.0 s</span></div>
+      <div class="seg">
+        <button data-off="-1">−1 s</button><button data-off="-0.25">−¼</button><button data-off="0">0</button><button data-off="0.25">+¼</button><button data-off="1">+1 s</button>
+      </div>
+    </div>
+    <div class="panel-sec">
+      <div class="panel-label">Veličina titla</div>
+      <div class="seg"><button data-size="-1">A−</button><button data-size="1">A+</button></div>
+    </div>
+    <div class="panel-sec" id="audioSec" hidden>
+      <div class="panel-label">Zvuk</div>
+      <div id="audioList"></div>
+    </div>
+  </div>
+</div>
+<div class="wrap info">
+  <div id="status" class="muted"></div>
+  <div id="tracks" class="muted small"></div>
+</div>
+<script src="/static/watch.js"></script>
+</body>
+</html>
