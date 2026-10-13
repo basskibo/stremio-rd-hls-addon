@@ -81,6 +81,10 @@ img { display: block; }
 @-webkit-keyframes flash { 0% { box-shadow: 0 0 0 4px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
 @keyframes flash { 0% { box-shadow: 0 0 0 4px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
 
+/* Omiljeno */
+.fav-btn { height: 40px; padding: 0 18px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); font-weight: 600; font-size: 15px; }
+.fav-btn.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+
 /* Izvori */
 .crumbs { margin: 22px 0 4px; font-size: 14px; }
 .crumbs a { color: var(--accent); }

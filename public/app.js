@@ -21,6 +21,46 @@
       return d;
     });
   }
+  function apiSend(method, url, body) {
+    return fetch(url, {
+      method: method,
+      headers: { 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d && d.error) throw new Error(d.error);
+      return d;
+    });
+  }
+
+  // ---------- omiljeno (čuva se na serveru) ----------
+  var favs = null;
+  function loadFavs() {
+    if (favs) return Promise.resolve(favs);
+    return api('/api/favorites').then(function (l) { favs = l; return l; }).catch(function () { return []; });
+  }
+  function isFav(id) {
+    return (favs || []).some(function (f) { return f.id === id; });
+  }
+  function favButton(m) {
+    var on = isFav(m.id);
+    return '<button class="fav-btn' + (on ? ' on' : '') + '" id="favBtn">' + (on ? '★ U omiljenom' : '☆ Dodaj u omiljeno') + '</button>';
+  }
+  function bindFav(m) {
+    var b = document.getElementById('favBtn');
+    if (!b) return;
+    b.addEventListener('click', function () {
+      var req = isFav(m.id)
+        ? apiSend('DELETE', '/api/favorites?id=' + encodeURIComponent(m.id))
+        : apiSend('POST', '/api/favorites', { id: m.id, type: m.type, name: m.name, poster: m.poster, year: m.year });
+      b.disabled = true;
+      req.then(function (l) {
+        favs = l;
+        b.outerHTML = favButton(m);
+        bindFav(m);
+      }).catch(function (e) { b.disabled = false; alert(e.message); });
+    });
+  }
+
   function loading(text) {
     view.innerHTML = '<div class="wrap"><div class="msg"><span class="spinner"></span>' + esc(text) + '</div></div>';
   }
@@ -87,9 +127,16 @@
             '<span class="badge accent">' + esc(r.epShort || '▶') + '</span>');
         }).join('') + '</div></section>';
     }
-    html += '<div id="catalogs"><div class="msg"><span class="spinner"></span>Učitavam…</div></div>' + footer() + '</div>';
+    html += '<div id="favRow"></div><div id="catalogs"><div class="msg"><span class="spinner"></span>Učitavam…</div></div>' + footer() + '</div>';
     view.innerHTML = html;
     bindLinkForm();
+    favs = null;
+    loadFavs().then(function (l) {
+      var el = document.getElementById('favRow');
+      if (!el || !l.length) return;
+      el.innerHTML = '<section class="section"><h2>★ Omiljeno</h2><div class="row-scroll">' +
+        l.map(function (m) { return card(m); }).join('') + '</div></section>';
+    });
     api('/api/home').then(function (groups) {
       var el = document.getElementById('catalogs');
       if (!el) return;
@@ -140,7 +187,8 @@
   // ---------- serija ----------
   function showSeries(type, id) {
     loading('Učitavam…');
-    getMeta(type, id).then(function (m) {
+    Promise.all([getMeta(type, id), loadFavs()]).then(function (res) {
+      var m = res[0];
       if (!m.videos.length) return showSources(type, id, m);
       var last = (store('last:' + m.id) || {});
       var st = showState[m.id];
@@ -176,7 +224,7 @@
     var html = '<div class="hero">' + (m.background ? '<div class="bg" style="background-image:url(\'' + esc(m.background) + '\')"></div>' : '') +
       '<div class="wrap"><div class="poster">' + imgTag(m.poster, m.name) + '</div><div>' +
       '<h1>' + esc(m.name) + '</h1><div class="muted">' + esc(m.year) + ' · ' + m.videos.length + ' epizoda</div>' +
-      (m.description ? '<p>' + esc(m.description) + '</p>' : '') + '</div></div></div>';
+      (m.description ? '<p>' + esc(m.description) + '</p>' : '') + '<div style="margin-top:14px">' + favButton(m) + '</div></div></div></div>';
 
     html += '<div class="wrap">';
     html += '<div class="toolbar">';
@@ -204,6 +252,7 @@
         '<div class="d">' + (isLast ? '<span class="badge accent">poslednje gledano</span> ' : '') + esc(v.released) + '</div></div></a>';
     }).join('') + '</div></div>';
     view.innerHTML = html;
+    bindFav(m);
 
     var sp = document.getElementById('seasonPills');
     if (sp) sp.addEventListener('click', function (e) {
@@ -267,6 +316,7 @@
       html += '<div class="crumbs">' + (m ? '<a href="#m/' + type + '/' + encodeURIComponent(m.id) + '">← ' + esc(m.name) + '</a>' : '<a href="javascript:history.back()">← Nazad</a>') + '</div>';
       html += '<h1 style="margin:6px 0 2px;font-size:26px">' + esc(epLabel || (m ? m.name : 'Izvori')) + '</h1>';
       if (v && v.title) html += '<div class="muted">' + esc(v.title) + '</div>';
+      if (metaIfMovie) html += '<div style="margin-top:12px">' + favButton(metaIfMovie) + '</div>';
       html += '<div class="muted" style="margin-top:10px;font-size:14px">⚡ = već je na Real-Debridu (kreće odmah) · samo fajlovi do ' + data.maxSizeGb + ' GB' +
         (data.tooBig ? ' (' + data.tooBig + ' većih sakriveno)' : '') + '</div>';
       if (!data.sources.length) {
@@ -278,6 +328,7 @@
             (s.quality ? '<span class="badge">' + esc(s.quality) + '</span>' : '') +
             (s.size ? '<span class="badge">' + esc(s.size) + '</span>' : '') +
             (s.subsHint > 0 ? '<span class="badge accent">verovatno EN titl</span>' : '') +
+            (s.h264 ? '<span class="badge">H.264 · bez konverzije</span>' : '') +
             (s.subsHint < 0 ? '<span class="badge warn">verovatno ruski</span>' : '') +
             (s.langs ? '<span class="muted" style="font-size:13px">' + esc(s.langs) + '</span>' : '') + '</div>' +
             '<div class="rel">' + esc(s.release) + '</div>' +
@@ -286,6 +337,7 @@
       }
       html += '</div>';
       view.innerHTML = html;
+      if (metaIfMovie) bindFav(metaIfMovie);
       view.querySelector('.sources') && view.querySelector('.sources').addEventListener('click', function () {
         if (m) rememberWatch(type, m, v);
       });

@@ -1,0 +1,7 @@
+node_modules
+hls
+logs
+data
+legacy
+.git
+.env

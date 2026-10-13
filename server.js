@@ -20,6 +20,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const HLS_DIR = path.join(ROOT, 'hls');
 const PUBLIC_DIR = path.join(ROOT, 'public');
+const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
+const FAVORITES_FILE = path.join(DATA_DIR, 'favorites.json');
 const PORT = Number(process.env.PORT) || 3000;
 const RD_TOKEN = (process.env.RD_TOKEN || process.env.RD_API_TOKEN || '').trim();
 const LAN_URL = trimSlash(process.env.LAN_URL) || `http://${lanIp()}:${PORT}`;
@@ -31,6 +33,8 @@ const TORRENTIO_OPTS =
   process.env.TORRENTIO_OPTS ||
   'qualityfilter=brremux,hdrall,dolbyvision,dolbyvisionwithhdr,threed,4k,scr,cam,unknown';
 const MAX_SIZE_GB = Number(process.env.MAX_SIZE_GB) || 1.5;
+/** Na slabom hardveru (Raspberry Pi) H.264 izvori idu prvi — samo se kopiraju, bez transkodiranja. */
+const PREFER_H264 = process.env.PREFER_H264 === '1';
 const AUDIO_LANGS = langList(process.env.AUDIO_LANG || 'jpn,ja,jp');
 const SUB_LANGS = langList(process.env.SUB_LANG || 'eng,en');
 const MAX_HEIGHT = Number(process.env.MAX_HEIGHT) || 1080;
@@ -149,6 +153,65 @@ async function meta(type, id) {
 }
 
 // ---------------------------------------------------------------------------
+// Omiljeno (JSON fajl na serveru — preživi brisanje Safari keša)
+// ---------------------------------------------------------------------------
+
+function readFavorites() {
+  try {
+    return JSON.parse(fs.readFileSync(FAVORITES_FILE, 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
+function writeFavorites(list) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = `${FAVORITES_FILE}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(list, null, 2));
+  fs.renameSync(tmp, FAVORITES_FILE);
+}
+
+function addFavorite(item) {
+  if (!item || !item.id || !item.type) throw new Error('Nedostaje id/type');
+  const entry = {
+    id: String(item.id),
+    type: String(item.type),
+    name: String(item.name || ''),
+    poster: String(item.poster || ''),
+    year: String(item.year || ''),
+    added: new Date().toISOString(),
+  };
+  const list = readFavorites().filter((f) => f.id !== entry.id);
+  list.unshift(entry);
+  writeFavorites(list);
+  return list;
+}
+
+function removeFavorite(id) {
+  const list = readFavorites().filter((f) => f.id !== id);
+  writeFavorites(list);
+  return list;
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (c) => {
+      data += c;
+      if (data.length > 100_000) req.destroy();
+    });
+    req.on('end', () => {
+      try {
+        resolve(data ? JSON.parse(data) : {});
+      } catch (e) {
+        reject(new Error('Neispravan JSON'));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Izvori (Torrentio + RD)
 // ---------------------------------------------------------------------------
 
@@ -201,13 +264,22 @@ async function findSources(type, id) {
       // Torrentio: naslov / fajl / 👤 💾 ⚙️ / zastavice jezika.
       langs: lines.slice(lines.indexOf(info) + 1).join(' ').trim(),
       subsHint: subsHint(title),
+      h264: /\b(x264|h\.?264|avc)\b/i.test(title) && !/x265|hevc|h\.?265|10.?bit|hi10/i.test(title),
       order,
     };
     sourcesByKey.set(src.key, { url: s.url, label: file || src.release, type, id });
     out.push(src);
   });
   // Keširani na RD-u prvi (kreću odmah), pa verovatno sa engleskim titlom, pa Torrentio redosled.
-  out.sort((a, b) => Number(b.cached) - Number(a.cached) || b.subsHint - a.subsHint || a.order - b.order);
+  const h264First = (a, b) => Number(b.h264) - Number(a.h264);
+  out.sort(
+    (a, b) =>
+      Number(b.cached) - Number(a.cached) ||
+      (PREFER_H264 && h264First(a, b)) ||
+      b.subsHint - a.subsHint ||
+      h264First(a, b) ||
+      a.order - b.order
+  );
   return { maxSizeGb: MAX_SIZE_GB, tooBig, sources: out.slice(0, 25) };
 }
 
@@ -218,11 +290,13 @@ async function resolveDirectUrl(url) {
   const loc = res.headers.get('location');
   if (!loc) throw new Error(`Torrentio resolve: HTTP ${res.status}`);
   if (/\/videos\/|torrentio/.test(loc) && !/real-debrid/.test(loc)) {
-    const what = (loc.match(/videos\/([a-z_]+)/) || [])[1] || loc;
+    const what = (loc.match(/videos\/(\w+)/) || [])[1] || loc;
     throw new Error(
       what.startsWith('downloading')
         ? 'Real-Debrid još skida ovaj torrent — izaberi izvor sa ⚡ ili probaj kasnije.'
-        : `Real-Debrid/Torrentio greška: ${what}`
+        : what.startsWith('download_failed')
+          ? 'Real-Debrid ne može da skine ovaj torrent — izaberi drugi izvor.'
+          : `Real-Debrid/Torrentio greška: ${what}`
     );
   }
   return loc;
@@ -300,17 +374,27 @@ function parseTime(t) {
 }
 
 /**
- * ASS → [[start, end, text]]. Izbacuje ono što kao običan titl izgleda kao smeće:
- * crteže (\p1), pozicionirane natpise (\pos/\move), stilove za pesme/natpise i
- * karaoke „slovo po slovo” linije.
+ * ASS → [[start, end, text, top]]. Izbacuje ono što kao običan titl izgleda kao smeće:
+ * crteže (\p1), pozicionirane natpise (\pos/\move), natpise/karaoke/romaji stilove i
+ * „slovo po slovo” linije. Prevod pesama ostaje; `top` = linija ide na vrh ekrana
+ * (stil ili \an7-9), kao romaji u One Piece fansubovima.
  */
 function parseAss(text) {
   const cues = [];
+  const styleTop = {};
+  let styleFields = null;
   let fields = null;
   for (const line of text.split(/\r?\n/)) {
     if (line.startsWith('Format:')) {
       const f = line.slice(7).split(',').map((x) => x.trim().toLowerCase());
       if (f.includes('text') && f.includes('start')) fields = f;
+      else if (f.includes('alignment')) styleFields = f;
+      continue;
+    }
+    if (line.startsWith('Style:') && styleFields) {
+      const parts = line.slice(6).split(',').map((x) => x.trim());
+      const al = Number(parts[styleFields.indexOf('alignment')]);
+      styleTop[parts[styleFields.indexOf('name')]] = al >= 7 && al <= 9;
       continue;
     }
     if (!line.startsWith('Dialogue:') || !fields) continue;
@@ -321,17 +405,20 @@ function parseAss(text) {
     });
     const raw = rec.text || '';
     if (/\\p[1-9]/.test(raw) || /\\(pos|move)\(/.test(raw)) continue;
-    if (/sign|song|kara|^op\b|^ed\b|title|typeset|^ts\b|lyric|romaji|kanji|note/i.test(rec.style || '')) continue;
+    if (/sign|kara|title|typeset|^ts\b|romaji|kanji|note/i.test(rec.style || '')) continue;
     const clean = raw
       .replace(/\{[^}]*\}/g, '')
       .replace(/\\N/gi, '\n')
       .replace(/\\h/g, ' ')
       .replace(/[ \t]+/g, ' ')
+      .replace(/ *\n */g, '\n')
       .trim();
     if (clean.replace(/\s/g, '').length <= 1) continue;
+    const an = raw.match(/\\an(\d)/);
+    const top = an ? Number(an[1]) >= 7 : Boolean(styleTop[rec.style]);
     const s = parseTime(rec.start);
     const e = parseTime(rec.end);
-    if (Number.isFinite(s) && Number.isFinite(e) && e > s) cues.push([s, e, clean]);
+    if (Number.isFinite(s) && Number.isFinite(e) && e > s) cues.push([s, e, clean, top ? 1 : 0]);
   }
   return tidyCues(cues);
 }
@@ -370,7 +457,7 @@ function tidyCues(cues) {
       }
     }
     if (dup) dup[1] = Math.max(dup[1], c[1]);
-    else out.push([Math.round(c[0] * 1000) / 1000, Math.round(c[1] * 1000) / 1000, c[2]]);
+    else out.push([Math.round(c[0] * 1000) / 1000, Math.round(c[1] * 1000) / 1000, c[2], c[3] || 0]);
   }
   return out;
 }
@@ -420,7 +507,7 @@ async function externalSubs(type, id) {
       log('OpenSubtitles:', e.message);
     }
   }
-  return out.slice(0, 8).map((s, n) => ({ ...s, label: `OpenSubtitles EN #${n + 1}`, kind: 'external' }));
+  return out.slice(0, 15).map((s, n) => ({ ...s, label: `OpenSubtitles EN #${n + 1}`, kind: 'external' }));
 }
 
 function loadExternalCues(url) {
@@ -548,8 +635,9 @@ async function runJob(j, sourceUrl, audioIndex) {
     path.join(j.dir, 'stream.m3u8')
   );
   // Izlazi 2..n: svaki tekstualni titl kao .ass (piše se usput, dok se video konvertuje).
+  // -ignore_readorder: inače ASS muxer drži sve linije do kraja ako fansub nije u ReadOrder redu.
   for (const s of j.embedded) {
-    args.push('-map', `0:${s.index}`, '-c:s', 'ass', '-flush_packets', '1', '-f', 'ass', s.file);
+    args.push('-map', `0:${s.index}`, '-c:s', 'ass', '-flush_packets', '1', '-f', 'ass', '-ignore_readorder', '1', s.file);
   }
 
   j.state = 'encode';
@@ -624,7 +712,7 @@ function embeddedCues(j, s) {
   try {
     cues = parseAss(fs.readFileSync(s.file, 'utf8'));
   } catch {}
-  return j.fmtStart ? cues.map(([a, b, t]) => [a - j.fmtStart, b - j.fmtStart, t]) : cues;
+  return j.fmtStart ? cues.map(([a, b, t, top]) => [a - j.fmtStart, b - j.fmtStart, t, top]) : cues;
 }
 
 /** Lista titlova za trenutni video + predlog koji da se uključi. */
@@ -724,7 +812,9 @@ const server = http.createServer(async (req, res) => {
   const p = decodeURIComponent(u.pathname);
   let m;
   try {
-    if (req.method === 'OPTIONS') return send(res, 204, '', 'text/plain', { 'access-control-allow-headers': '*' });
+    if (req.method === 'OPTIONS') {
+      return send(res, 204, '', 'text/plain', { 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, POST, DELETE' });
+    }
     if (p === '/' || p === '/index.html') return serveStatic(res, 'index.html');
     if (/^\/watch\/\w+$/.test(p)) return serveStatic(res, 'watch.html');
     if ((m = p.match(/^\/static\/([\w.-]+)$/))) return serveStatic(res, m[1]);
@@ -735,6 +825,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/config') return sendJson(res, { addonUrl: `${PUBLIC_URL}/manifest.json`, maxSizeGb: MAX_SIZE_GB });
     if (p === '/api/home') return sendJson(res, await home());
+    if (p === '/api/favorites') {
+      if (req.method === 'POST') return sendJson(res, addFavorite(await readBody(req)));
+      if (req.method === 'DELETE') return sendJson(res, removeFavorite(u.searchParams.get('id') || ''));
+      return sendJson(res, readFavorites());
+    }
     if (p === '/api/search') return sendJson(res, await search(u.searchParams.get('q') || ''));
     if ((m = p.match(/^\/api\/meta\/(\w+)\/(.+)$/))) return sendJson(res, await meta(m[1], m[2]));
     if ((m = p.match(/^\/api\/sources\/(\w+)\/(.+)$/))) return sendJson(res, await findSources(m[1], m[2]));

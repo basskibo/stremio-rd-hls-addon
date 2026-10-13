@@ -18,7 +18,7 @@
     pendingSeek: null, // apsolutno vreme na koje skačemo kada novi playlist bude spreman
     wantPlay: false,
   };
-  var subs = { list: [], sid: '', cues: [], picked: false, gen: 0, timer: null, lastHtml: null };
+  var subs = { list: [], sid: '', cues: [], picked: false, gen: 0, timer: null, lastHtml: null, lastTop: null };
   var prefs = load('prefs') || { size: 5, offset: 0 };
   var pollTimer = null;
   var hideTimer = null;
@@ -252,7 +252,9 @@
   }
   function sizeSubs() {
     var h = stage.clientHeight || 400;
-    $('subs').style.fontSize = Math.round(h * (0.028 + prefs.size * 0.004)) + 'px';
+    var px = Math.round(h * (0.028 + prefs.size * 0.004));
+    $('subs').style.fontSize = px + 'px';
+    $('subsTop').style.fontSize = Math.round(px * 0.85) + 'px';
   }
   window.addEventListener('resize', sizeSubs);
 
@@ -309,20 +311,25 @@
       var mid = (lo + hi) >> 1;
       if (c[mid][0] <= t) { idx = mid; lo = mid + 1; } else hi = mid - 1;
     }
-    var out = [];
+    var out = { bottom: [], top: [] };
     for (var i = idx; i >= 0 && i > idx - 12; i--) {
-      if (c[i][1] > t && out.indexOf(c[i][2]) < 0) out.unshift(c[i][2]);
+      var list = c[i][3] ? out.top : out.bottom;
+      if (c[i][1] > t && list.indexOf(c[i][2]) < 0) list.unshift(c[i][2]);
     }
     return out;
   }
+
+  function spanLine(l) { return '<span>' + esc(l) + '</span>'; }
 
   // ---------- petlja: titlovi + traka ----------
   var lastSave = 0;
   setInterval(function () {
     var t = absNow();
-    var lines = subs.sid && st.playlist ? activeText(t - prefs.offset) : [];
-    var html = lines.map(function (l) { return '<span>' + esc(l) + '</span>'; }).join('<br>');
+    var lines = subs.sid && st.playlist ? activeText(t - prefs.offset) : { bottom: [], top: [] };
+    var html = lines.bottom.map(spanLine).join('<br>');
+    var top = lines.top.map(spanLine).join('<br>');
     if (html !== subs.lastHtml) { $('subs').innerHTML = html; subs.lastHtml = html; }
+    if (top !== subs.lastTop) { $('subsTop').innerHTML = top; subs.lastTop = top; }
 
     if (st.duration) {
       if (!dragging) {

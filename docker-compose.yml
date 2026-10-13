@@ -1,0 +1,11 @@
+services:
+  ipad-hls:
+    build: .
+    container_name: ipad-hls
+    restart: unless-stopped
+    # host mreža: server vidi pravu LAN adresu (za linkove ka plejeru) i port 3000 je odmah dostupan.
+    network_mode: host
+    env_file: .env
+    volumes:
+      - ./data:/app/data   # omiljeno
+      - ./hls:/app/hls     # privremeni video segmenti (na Pi-ju bolje USB disk nego SD kartica)

@@ -33,6 +33,28 @@ pusti ngrok i podesi `PUBLIC_URL` — sam video i dalje ide preko lokalne mreže
   PGS (slika) titlovi se „upeku” samo ako nema tekstualnog engleskog.
 - **Premotavanje:** traka pokazuje šta je konvertovano; skok van toga pokreće konverziju od te tačke.
   Pozicija se pamti („Nastavi od…”), a dugme *Sledeća* vodi na sledeću epizodu.
+- **Omiljeno:** ☆ na stranici serije/filma; red „Omiljeno” na početnoj. Čuva se na serveru (`data/favorites.json`).
 - Jedan video u isto vreme; novi zaustavlja stari.
+
+## Docker / Raspberry Pi (da radi stalno)
+
+```bash
+docker compose up -d --build
+```
+
+Koristi `.env` iz ovog foldera; `restart: unless-stopped` ga podiže posle restarta. Omiljeno je u `./data`,
+privremeni video u `./hls` (na Pi-ju stavi folder na USB disk — SD kartica ne voli ~1 GB pisanja po epizodi).
+
+**Pi i transkodiranje:** H.264 izvori se samo kopiraju i rade odlično i na Pi-ju. HEVC/10-bit (većina
+anime izdanja) mora da se konvertuje, a to je na Pi-ju sporo: Pi 4 ne stiže ni 720p u realnom vremenu,
+Pi 5 otprilike 720p. Za Pi u `.env` stavi:
+
+```
+PREFER_H264=1      # H.264 izvori na vrh liste (oznaka „bez konverzije”)
+MAX_HEIGHT=720
+X264_PRESET=ultrafast
+```
+
+Ako ćeš često gledati HEVC, bolje je da server ostane na ovom PC-u (ili bilo kom x86 mini PC-u).
 
 Stara (WebTorrent/Stremio-in-app) verzija je u `legacy/` (`npm run legacy`).
